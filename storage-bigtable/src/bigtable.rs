@@ -39,6 +39,7 @@ pub type RowData = Vec<(CellName, CellValue)>;
 pub type RowDataSlice<'a> = &'a [(CellName, CellValue)];
 pub type CellName = String;
 pub type CellValue = Vec<u8>;
+
 pub enum CellData<B, P> {
     Bincode(B),
     Protobuf(P),
@@ -698,6 +699,29 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
         self.put_row_data(table, "x", &new_row_data).await?;
         Ok(bytes_written)
+    }
+
+    pub async fn get_protobuf_or_bincode_cells<B, P>(
+        &mut self,
+        table: &str,
+        row_keys: Vec<RowKey>,
+    ) -> Result<Vec<(RowKey, CellData<B, P>)>>
+    where
+        B: serde::de::DeserializeOwned,
+        P: prost::Message + Default,
+    {
+        Ok(self
+            .get_multi_row_data(table, row_keys.as_slice())
+            .await?
+            .into_iter()
+            .map(|(key, row_data)| {
+                let key_str = key.to_string();
+                (
+                    key,
+                    deserialize_protobuf_or_bincode_cell_data(&row_data, table, key_str).unwrap(),
+                )
+            })
+            .collect())
     }
 
     pub async fn put_protobuf_cells<T>(

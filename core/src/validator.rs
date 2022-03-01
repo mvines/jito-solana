@@ -169,6 +169,7 @@ pub struct ValidatorConfig {
     pub accounts_shrink_ratio: AccountShrinkThreshold,
     pub wait_to_vote_slot: Option<Slot>,
     pub ledger_column_options: LedgerColumnOptions,
+    pub validator_interface_address: Option<SocketAddr>,
 }
 
 impl Default for ValidatorConfig {
@@ -231,6 +232,7 @@ impl Default for ValidatorConfig {
             accounts_db_config: None,
             wait_to_vote_slot: None,
             ledger_column_options: LedgerColumnOptions::default(),
+            validator_interface_address: None,
         }
     }
 }
@@ -339,6 +341,7 @@ pub struct Validator {
     pub bank_forks: Arc<RwLock<BankForks>>,
     accountsdb_repl_service: Option<AccountsDbReplService>,
     geyser_plugin_service: Option<GeyserPluginService>,
+    pub validator_interface_address: Option<SocketAddr>,
 }
 
 // in the distant future, get rid of ::new()/exit() and use Result properly...
@@ -958,6 +961,7 @@ impl Validator {
             cluster_confirmed_slot_sender,
             &cost_model,
             &identity_keypair,
+            config.validator_interface_address,
         );
 
         datapoint_info!("validator-new", ("id", id.to_string(), String));
@@ -988,6 +992,7 @@ impl Validator {
             bank_forks,
             accountsdb_repl_service,
             geyser_plugin_service,
+            validator_interface_address: config.validator_interface_address,
         }
     }
 

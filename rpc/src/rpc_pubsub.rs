@@ -2,7 +2,6 @@
 
 use {
     crate::{
-        rpc::check_is_at_least_confirmed,
         rpc_pubsub_service::PubSubConfig,
         rpc_subscription_tracker::{
             AccountSubscriptionParams, BlockSubscriptionKind, BlockSubscriptionParams,
@@ -522,8 +521,6 @@ impl RpcSolPubSubInternal for RpcSolPubSubImpl {
             return Err(Error::new(jsonrpc_core::ErrorCode::MethodNotFound));
         }
         let config = config.unwrap_or_default();
-        let commitment = config.commitment.unwrap_or_default();
-        check_is_at_least_confirmed(commitment)?;
         let params = BlockSubscriptionParams {
             commitment: config.commitment.unwrap_or_default(),
             encoding: config.encoding.unwrap_or(UiTransactionEncoding::Base64),

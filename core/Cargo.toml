@@ -23,10 +23,12 @@ crossbeam-channel = "0.5"
 dashmap = { version = "4.0.2", features = ["rayon", "raw-api"] }
 etcd-client = { version = "0.8.4", features = ["tls"] }
 fs_extra = "1.2.0"
+futures-util = "0.3"
 histogram = "0.6.9"
 itertools = "0.10.3"
 log = "0.4.14"
 lru = "0.7.3"
+solana-mev = { path = "../mev" }
 rand = "0.7.0"
 rand_chacha = "0.2.2"
 rayon = "1.5.1"

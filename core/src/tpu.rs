@@ -17,6 +17,7 @@ use {
     crossbeam_channel::{unbounded, Receiver},
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{blockstore::Blockstore, blockstore_processor::TransactionStatusSender},
+    solana_mev::{recv_verify_stage::RecvVerifyStage, tpu_proxy_advertiser::TpuProxyAdvertiser},
     solana_poh::poh_recorder::{PohRecorder, WorkingBankEntry},
     solana_rpc::{
         optimistically_confirmed_bank_tracker::BankNotificationSender,
@@ -29,10 +30,11 @@ use {
     },
     solana_sdk::signature::Keypair,
     std::{
-        net::UdpSocket,
+        net::{SocketAddr, UdpSocket},
         sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
         thread,
     },
+    tokio::sync::mpsc::unbounded_channel,
 };
 
 pub const DEFAULT_TPU_COALESCE_MS: u64 = 5;
@@ -52,6 +54,8 @@ pub struct Tpu {
     fetch_stage: FetchStage,
     sigverify_stage: SigVerifyStage,
     vote_sigverify_stage: SigVerifyStage,
+    recv_verify_stage: Option<RecvVerifyStage>,
+    tpu_proxy_advertiser: Option<TpuProxyAdvertiser>,
     banking_stage: BankingStage,
     cluster_info_vote_listener: ClusterInfoVoteListener,
     broadcast_stage: BroadcastStage,
@@ -85,6 +89,7 @@ impl Tpu {
         cluster_confirmed_slot_sender: GossipDuplicateConfirmedSlotsSender,
         cost_model: &Arc<RwLock<CostModel>>,
         keypair: &Keypair,
+        validator_interface_address: Option<SocketAddr>,
     ) -> Self {
         let TpuSockets {
             transactions: transactions_sockets,
@@ -127,6 +132,7 @@ impl Tpu {
         );
 
         let (verified_sender, verified_receiver) = unbounded();
+        let recv_verified_sender = verified_sender.clone();
 
         let tpu_quic_t = solana_streamer::quic::spawn_server(
             transactions_quic_sockets,
@@ -153,6 +159,23 @@ impl Tpu {
                 verifier,
             )
         };
+
+        // MEV TPU proxy packet injection
+        let mut recv_verify_stage = None;
+        let mut tpu_proxy_advertiser = None;
+        if let Some(validator_interface_address) = validator_interface_address {
+            let (tpu_notify_sender, tpu_notify_receiver) =
+                unbounded_channel::<(Option<SocketAddr>, Option<SocketAddr>)>();
+            recv_verify_stage = Some(RecvVerifyStage::new(
+                cluster_info.keypair(),
+                validator_interface_address,
+                recv_verified_sender,
+                tpu_notify_sender,
+            ));
+            tpu_proxy_advertiser = Some(TpuProxyAdvertiser::new(cluster_info, tpu_notify_receiver));
+        } else {
+            info!("[MEV] Missing TPU or validator addresses, running without TPU proxy");
+        }
 
         let (verified_gossip_vote_packets_sender, verified_gossip_vote_packets_receiver) =
             unbounded();
@@ -198,6 +221,8 @@ impl Tpu {
             fetch_stage,
             sigverify_stage,
             vote_sigverify_stage,
+            recv_verify_stage,
+            tpu_proxy_advertiser,
             banking_stage,
             cluster_info_vote_listener,
             broadcast_stage,
@@ -208,7 +233,7 @@ impl Tpu {
     }
 
     pub fn join(self) -> thread::Result<()> {
-        let results = vec![
+        let mut results = vec![
             self.fetch_stage.join(),
             self.sigverify_stage.join(),
             self.vote_sigverify_stage.join(),
@@ -217,6 +242,12 @@ impl Tpu {
             self.find_packet_sender_stake_stage.join(),
             self.vote_find_packet_sender_stake_stage.join(),
         ];
+        if let (Some(recv_verify_stage), Some(tpu_proxy_advertiser)) =
+            (self.recv_verify_stage, self.tpu_proxy_advertiser)
+        {
+            results.push(recv_verify_stage.join());
+            results.push(tpu_proxy_advertiser.join());
+        }
         self.tpu_quic_t.join()?;
         let broadcast_result = self.broadcast_stage.join();
         for result in results {
