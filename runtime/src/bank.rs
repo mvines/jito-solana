@@ -3488,8 +3488,24 @@ impl Bank {
         transactions: &'b [SanitizedTransaction],
         transaction_results: impl Iterator<Item = Result<()>>,
     ) -> TransactionBatch<'a, 'b> {
-        // this lock_results could be: Ok, AccountInUse, WouldExceedBlockMaxLimit or WouldExceedAccountMaxLimit
+        // this lock_results could be: Ok, AccountInUse, AccountLoadedTwice or TooManyAccountLocks
         let lock_results = self.rc.accounts.lock_accounts_with_results(
+            transactions.iter(),
+            transaction_results,
+            &self.feature_set,
+        );
+        TransactionBatch::new(lock_results, self, Cow::Borrowed(transactions))
+    }
+
+    /// Prepare a locked transaction batch from a list of sanitized transactions, and their cost
+    /// limited packing status, where transactions will be locked sequentially until the first failure
+    pub fn prepare_sequential_sanitized_batch_with_results<'a, 'b>(
+        &'a self,
+        transactions: &'b [SanitizedTransaction],
+        transaction_results: impl Iterator<Item = Result<()>>,
+    ) -> TransactionBatch<'a, 'b> {
+        // this lock_results could be: Ok, AccountInUse, BundleNotContinuous, AccountLoadedTwice, or TooManyAccountLocks
+        let lock_results = self.rc.accounts.lock_accounts_sequential_with_results(
             transactions.iter(),
             transaction_results,
             &self.feature_set,
@@ -3542,6 +3558,7 @@ impl Bank {
             false,
             true,
             &mut timings,
+            None,
         );
 
         let post_simulation_accounts = loaded_transactions
@@ -3987,6 +4004,7 @@ impl Bank {
         enable_cpi_recording: bool,
         enable_log_recording: bool,
         timings: &mut ExecuteTimings,
+        cached_accounts: Option<&HashMap<Pubkey, AccountSharedData>>,
     ) -> LoadAndExecuteTransactionsOutput {
         let sanitized_txs = batch.sanitized_transactions();
         debug!("processing transactions: {}", sanitized_txs.len());
@@ -4030,6 +4048,7 @@ impl Bank {
             &self.rent_collector,
             &self.feature_set,
             &self.fee_structure,
+            cached_accounts,
         );
         load_time.stop();
 
@@ -5261,6 +5280,7 @@ impl Bank {
             enable_cpi_recording,
             enable_log_recording,
             timings,
+            None,
         );
 
         let results = self.commit_transactions(

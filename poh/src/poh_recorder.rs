@@ -56,9 +56,16 @@ pub enum PohRecorderError {
     SendError(#[from] SendError<WorkingBankEntry>),
 }
 
-type Result<T> = std::result::Result<T, PohRecorderError>;
+pub type Result<T> = std::result::Result<T, PohRecorderError>;
 
-pub type WorkingBankEntry = (Arc<Bank>, (Entry, u64));
+pub type RecordSender = Sender<(Record, Sender<Result<()>>)>;
+pub type RecordReceiver = Receiver<(Record, Sender<Result<()>>)>;
+
+#[derive(Clone)]
+pub enum WorkingBankEntry {
+    Single((Arc<Bank>, (Entry, u64))),
+    Bundle((Arc<Bank>, (Vec<Entry>, u64))),
+}
 
 #[derive(Clone)]
 pub struct BankStart {
@@ -79,31 +86,21 @@ impl BankStart {
     }
 }
 
-pub struct Record {
-    pub mixin: Hash,
-    pub transactions: Vec<VersionedTransaction>,
-    pub slot: Slot,
-    pub sender: Sender<Result<()>>,
-}
-impl Record {
-    pub fn new(
+pub enum Record {
+    Single {
         mixin: Hash,
         transactions: Vec<VersionedTransaction>,
         slot: Slot,
-        sender: Sender<Result<()>>,
-    ) -> Self {
-        Self {
-            mixin,
-            transactions,
-            slot,
-            sender,
-        }
-    }
+    },
+    Bundle {
+        mixins_txs: Vec<(Hash, Vec<VersionedTransaction>)>,
+        slot: Slot,
+    },
 }
 
 pub struct TransactionRecorder {
     // shared by all users of PohRecorder
-    pub record_sender: Sender<Record>,
+    pub record_sender: RecordSender,
     pub is_exited: Arc<AtomicBool>,
 }
 
@@ -114,7 +111,7 @@ impl Clone for TransactionRecorder {
 }
 
 impl TransactionRecorder {
-    pub fn new(record_sender: Sender<Record>, is_exited: Arc<AtomicBool>) -> Self {
+    pub fn new(record_sender: RecordSender, is_exited: Arc<AtomicBool>) -> Self {
         Self {
             // shared
             record_sender,
@@ -122,17 +119,10 @@ impl TransactionRecorder {
             is_exited,
         }
     }
-    pub fn record(
-        &self,
-        bank_slot: Slot,
-        mixin: Hash,
-        transactions: Vec<VersionedTransaction>,
-    ) -> Result<()> {
-        // create a new channel so that there is only 1 sender and when it goes out of scope, the receiver fails
+
+    pub fn record(&self, record: Record) -> Result<()> {
         let (result_sender, result_receiver) = unbounded();
-        let res =
-            self.record_sender
-                .send(Record::new(mixin, transactions, bank_slot, result_sender));
+        let res = self.record_sender.send((record, result_sender));
         if res.is_err() {
             // If the channel is dropped, then the validator is shutting down so return that we are hitting
             //  the max tick height to stop transaction processing and flush any transactions in the pipeline.
@@ -226,7 +216,7 @@ pub struct PohRecorder {
     report_metrics_us: u64,
     ticks_from_record: u64,
     last_metric: Instant,
-    record_sender: Sender<Record>,
+    record_sender: RecordSender,
     pub is_exited: Arc<AtomicBool>,
 }
 
@@ -510,7 +500,10 @@ impl PohRecorder {
 
             for tick in &self.tick_cache[..entry_count] {
                 working_bank.bank.register_tick(&tick.0.hash);
-                send_result = self.sender.send((working_bank.bank.clone(), tick.clone()));
+                send_result = self.sender.send(WorkingBankEntry::Single((
+                    working_bank.bank.clone(),
+                    tick.clone(),
+                )));
                 if send_result.is_err() {
                     break;
                 }
@@ -678,7 +671,10 @@ impl PohRecorder {
                             transactions,
                         };
                         let bank_clone = working_bank.bank.clone();
-                        self.sender.send((bank_clone, (entry, self.tick_height)))
+                        self.sender.send(WorkingBankEntry::Single((
+                            bank_clone,
+                            (entry, self.tick_height),
+                        )))
                     },
                     (),
                     "send_poh_entry",
@@ -707,7 +703,7 @@ impl PohRecorder {
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         poh_config: &Arc<PohConfig>,
         is_exited: Arc<AtomicBool>,
-    ) -> (Self, Receiver<WorkingBankEntry>, Receiver<Record>) {
+    ) -> (Self, Receiver<WorkingBankEntry>, RecordReceiver) {
         let tick_number = 0;
         let poh = Arc::new(Mutex::new(Poh::new_with_slot_info(
             last_entry_hash,
@@ -776,7 +772,7 @@ impl PohRecorder {
         leader_schedule_cache: &Arc<LeaderScheduleCache>,
         poh_config: &Arc<PohConfig>,
         is_exited: Arc<AtomicBool>,
-    ) -> (Self, Receiver<WorkingBankEntry>, Receiver<Record>) {
+    ) -> (Self, Receiver<WorkingBankEntry>, RecordReceiver) {
         Self::new_with_clear_signal(
             tick_height,
             last_entry_hash,

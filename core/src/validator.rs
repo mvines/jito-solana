@@ -168,6 +168,8 @@ pub struct ValidatorConfig {
     pub no_wait_for_vote_to_start_leader: bool,
     pub accounts_shrink_ratio: AccountShrinkThreshold,
     pub wait_to_vote_slot: Option<Slot>,
+    pub tpu_proxy_address: Option<SocketAddr>,
+    pub tpu_proxy_forward_address: Option<SocketAddr>,
     pub validator_interface_address: Option<SocketAddr>,
 }
 
@@ -230,6 +232,8 @@ impl Default for ValidatorConfig {
             accounts_shrink_ratio: AccountShrinkThreshold::default(),
             accounts_db_config: None,
             wait_to_vote_slot: None,
+            tpu_proxy_address: None,
+            tpu_proxy_forward_address: None,
             validator_interface_address: None,
         }
     }
@@ -959,7 +963,7 @@ impl Validator {
             cluster_confirmed_slot_sender,
             &cost_model,
             &identity_keypair,
-            config.validator_interface_address,
+            config.tpu_proxy_address,
         );
 
         datapoint_info!("validator-new", ("id", id.to_string(), String));

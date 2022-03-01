@@ -5,26 +5,24 @@
 use {
     crate::{
         backoff::BackoffStrategy,
-        packet::PacketBatch as PbPacketBatch,
-        validator_interface::{
-            validator_interface_client::ValidatorInterfaceClient, GetTpuConfigsRequest,
-            SubscribePacketsRequest,
+        proto::{
+            packet::PacketBatch as PbPacketBatch,
+            validator_interface::{
+                validator_interface_client::ValidatorInterfaceClient, GetTpuConfigsRequest,
+                SubscribePacketsRequest,
+            },
         },
+        proto_packet_to_packet,
     },
     crossbeam_channel::Sender,
     futures_util::StreamExt,
     log::*,
-    solana_perf::{
-        cuda_runtime::PinnedVec,
-        packet::{Packet, PacketBatch},
-    },
+    solana_perf::{cuda_runtime::PinnedVec, packet::PacketBatch},
     solana_sdk::{
-        packet::{PacketFlags, PACKET_DATA_SIZE},
         signature::{Keypair, Signature},
         signer::Signer,
     },
     std::{
-        cmp::min,
         net::{IpAddr, Ipv4Addr, SocketAddr},
         sync::{Arc, RwLockReadGuard},
         thread::{self, JoinHandle},
@@ -50,8 +48,6 @@ pub struct RecvVerifyStage {
     packet_converter_thread: JoinHandle<()>,
     proxy_bridge_thread: JoinHandle<()>,
 }
-
-const UNKNOWN_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
 
 impl RecvVerifyStage {
     pub fn new(
@@ -141,34 +137,15 @@ impl RecvVerifyStage {
                 Some(batch_list) => {
                     let mut converted_batch_list = Vec::with_capacity(batch_list.len());
                     for batch in batch_list {
-                        let mut packets = PinnedVec::with_capacity(batch.packets.len());
-                        for p in batch.packets {
-                            let mut data = [0; PACKET_DATA_SIZE];
-                            let copy_len = min(data.len(), p.data.len());
-                            data[..copy_len].copy_from_slice(&p.data[..copy_len]);
-                            let mut packet = Packet::new(data, Default::default());
-                            if let Some(meta) = p.meta {
-                                packet.meta.size = meta.size as usize;
-                                packet.meta.addr = meta.addr.parse().unwrap_or(UNKNOWN_IP);
-                                packet.meta.port = meta.port as u16;
-                                if let Some(flags) = meta.flags {
-                                    if flags.simple_vote_tx {
-                                        packet.meta.flags.insert(PacketFlags::SIMPLE_VOTE_TX);
-                                    }
-                                    if flags.forwarded {
-                                        packet.meta.flags.insert(PacketFlags::FORWARDED);
-                                    }
-                                    if flags.tracer_tx {
-                                        packet.meta.flags.insert(PacketFlags::TRACER_TX);
-                                    }
-                                    if flags.repair {
-                                        packet.meta.flags.insert(PacketFlags::REPAIR);
-                                    }
-                                }
-                            }
-                            packets.push(packet);
-                        }
-                        converted_batch_list.push(PacketBatch { packets });
+                        converted_batch_list.push(PacketBatch {
+                            packets: PinnedVec::from_vec(
+                                batch
+                                    .packets
+                                    .into_iter()
+                                    .map(proto_packet_to_packet)
+                                    .collect(),
+                            ),
+                        });
                     }
                     // Async send, from unbounded docs:
                     // A send on this channel will always succeed as long as

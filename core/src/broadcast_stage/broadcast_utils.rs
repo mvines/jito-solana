@@ -1,5 +1,5 @@
 use {
-    crate::result::Result,
+    crate::result::{Error::BundleNotSupported, Result},
     crossbeam_channel::Receiver,
     solana_entry::entry::Entry,
     solana_ledger::shred::Shred,
@@ -39,7 +39,17 @@ const RECEIVE_ENTRY_COUNT_THRESHOLD: usize = 8;
 pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result<ReceiveResults> {
     let timer = Duration::new(1, 0);
     let recv_start = Instant::now();
-    let (mut bank, (entry, mut last_tick_height)) = receiver.recv_timeout(timer)?;
+    // let (mut bank, (entry, mut last_tick_height)) = receiver.recv_timeout(timer)?;
+    let wbe = receiver.recv_timeout(timer)?;
+
+    let (mut bank, entry, mut last_tick_height) =
+        if let WorkingBankEntry::Single((bank, (entry, last_tick_height))) =
+            wbe.try_into().map_err(|_| BundleNotSupported)?
+        {
+            (bank, entry, last_tick_height)
+        } else {
+            todo!()
+        };
 
     let mut entries = vec![entry];
     let mut slot = bank.slot();
@@ -48,7 +58,11 @@ pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result
     assert!(last_tick_height <= max_tick_height);
 
     if last_tick_height != max_tick_height {
-        while let Ok((try_bank, (entry, tick_height))) = receiver.try_recv() {
+        while let Ok(WorkingBankEntry::Single((try_bank, (entry, tick_height)))) = receiver
+            .try_recv()
+            .try_into()
+            .map_err(|_| BundleNotSupported)?
+        {
             // If the bank changed, that implies the previous slot was interrupted and we do not have to
             // broadcast its entries.
             if try_bank.slot() != slot {

@@ -10,7 +10,7 @@ use {
         qos_service::QosService,
         unprocessed_packet_batches::*,
     },
-    crossbeam_channel::{Receiver as CrossbeamReceiver, RecvTimeoutError},
+    crossbeam_channel::{Receiver, RecvTimeoutError},
     histogram::Histogram,
     itertools::Itertools,
     retain_mut::RetainMut,
@@ -19,13 +19,18 @@ use {
     solana_ledger::blockstore_processor::TransactionStatusSender,
     solana_measure::measure::Measure,
     solana_metrics::inc_new_counter_info,
+    solana_mev::bundle::Bundle,
     solana_perf::{
         cuda_runtime::PinnedVec,
         data_budget::DataBudget,
         packet::{limited_deserialize, Packet, PacketBatch, PACKETS_PER_BATCH},
         perf_libs,
     },
-    solana_poh::poh_recorder::{BankStart, PohRecorder, PohRecorderError, TransactionRecorder},
+    solana_poh::poh_recorder::{
+        BankStart, PohRecorder,
+        PohRecorderError::{self},
+        Record, TransactionRecorder,
+    },
     solana_program_runtime::timings::ExecuteTimings,
     solana_runtime::{
         accounts_db::ErrorCounters,
@@ -39,6 +44,7 @@ use {
         vote_sender_types::ReplayVoteSender,
     },
     solana_sdk::{
+        account::AccountSharedData,
         clock::{
             Slot, DEFAULT_TICKS_PER_SLOT, MAX_PROCESSING_AGE, MAX_TRANSACTION_FORWARDING_DELAY,
             MAX_TRANSACTION_FORWARDING_DELAY_GPU,
@@ -68,6 +74,7 @@ use {
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
     },
+    thiserror::Error,
 };
 
 /// Transaction forwarding
@@ -120,6 +127,26 @@ pub struct ExecuteAndCommitTransactionsOutput {
     commit_transactions_result: Result<(), PohRecorderError>,
     execute_and_commit_timings: LeaderExecuteAndCommitTimings,
 }
+
+#[derive(Error, Debug, Clone)]
+pub enum BundleExecutionError {
+    #[error("Bank is not processing transactions.")]
+    BankNotProcessingTransactions,
+
+    #[error("PoH max height reached in the middle of a bundle.")]
+    PohError(#[from] PohRecorderError),
+
+    #[error("No records to record to PoH")]
+    NoRecordsToRecord,
+
+    #[error("A transaction in the bundle failed")]
+    TransactionFailure(#[from] TransactionError),
+
+    #[error("The bundle exceeds the cost model")]
+    ExceedsCostModel,
+}
+
+type BundleExecutionResult<T> = std::result::Result<T, BundleExecutionError>;
 
 #[derive(Debug, Default)]
 pub struct BankingStageStats {
@@ -380,12 +407,13 @@ impl BankingStage {
     pub fn new(
         cluster_info: &Arc<ClusterInfo>,
         poh_recorder: &Arc<Mutex<PohRecorder>>,
-        verified_receiver: CrossbeamReceiver<Vec<PacketBatch>>,
-        tpu_verified_vote_receiver: CrossbeamReceiver<Vec<PacketBatch>>,
-        verified_vote_receiver: CrossbeamReceiver<Vec<PacketBatch>>,
+        verified_receiver: Receiver<Vec<PacketBatch>>,
+        tpu_verified_vote_receiver: Receiver<Vec<PacketBatch>>,
+        verified_vote_receiver: Receiver<Vec<PacketBatch>>,
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: ReplayVoteSender,
         cost_model: Arc<RwLock<CostModel>>,
+        bundle_receiver: Receiver<Vec<Bundle>>,
     ) -> Self {
         Self::new_num_threads(
             cluster_info,
@@ -397,6 +425,7 @@ impl BankingStage {
             transaction_status_sender,
             gossip_vote_sender,
             cost_model,
+            bundle_receiver,
         )
     }
 
@@ -404,13 +433,14 @@ impl BankingStage {
     fn new_num_threads(
         cluster_info: &Arc<ClusterInfo>,
         poh_recorder: &Arc<Mutex<PohRecorder>>,
-        verified_receiver: CrossbeamReceiver<Vec<PacketBatch>>,
-        tpu_verified_vote_receiver: CrossbeamReceiver<Vec<PacketBatch>>,
-        verified_vote_receiver: CrossbeamReceiver<Vec<PacketBatch>>,
+        verified_receiver: Receiver<Vec<PacketBatch>>,
+        tpu_verified_vote_receiver: Receiver<Vec<PacketBatch>>,
+        verified_vote_receiver: Receiver<Vec<PacketBatch>>,
         num_threads: u32,
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: ReplayVoteSender,
         cost_model: Arc<RwLock<CostModel>>,
+        bundle_receiver: Receiver<Vec<Bundle>>,
     ) -> Self {
         assert!(num_threads >= MIN_TOTAL_THREADS);
         // Single thread to generate entries from many banks.
@@ -420,7 +450,7 @@ impl BankingStage {
         let batch_limit = TOTAL_BUFFERED_PACKETS
             / ((num_threads - NUM_VOTE_PROCESSING_THREADS) as usize * PACKETS_PER_BATCH);
         // Many banks that process transactions in parallel.
-        let bank_thread_hdls: Vec<JoinHandle<()>> = (0..num_threads)
+        let mut bank_thread_hdls: Vec<JoinHandle<()>> = (0..num_threads)
             .map(|i| {
                 let (verified_receiver, forward_option) = match i {
                     0 => {
@@ -462,7 +492,454 @@ impl BankingStage {
                     .unwrap()
             })
             .collect();
+
+        let poh_recorder = poh_recorder.clone();
+        let gossip_vote_sender = gossip_vote_sender.clone();
+
+        let id = bank_thread_hdls.len() as u32;
+        let bundle_thread = Builder::new()
+            .name("solana-banking-stage-bundle".to_string())
+            .spawn(move || {
+                let transaction_status_sender = transaction_status_sender.clone();
+                Self::bundle_stage(
+                    &poh_recorder,
+                    transaction_status_sender,
+                    bundle_receiver,
+                    gossip_vote_sender,
+                    id,
+                    cost_model,
+                );
+            })
+            .unwrap();
+
+        bank_thread_hdls.push(bundle_thread);
+
         Self { bank_thread_hdls }
+    }
+
+    fn get_transaction_qos_results(
+        qos_service: &QosService,
+        txs: &[SanitizedTransaction],
+        bank: &Arc<Bank>,
+    ) -> (Vec<Result<(), TransactionError>>, usize) {
+        let tx_costs = qos_service.compute_transaction_costs(txs.iter());
+
+        let (transactions_qos_results, num_included) =
+            qos_service.select_transactions_per_cost(txs.iter(), tx_costs.iter(), bank);
+
+        let cost_model_throttled_transactions_count = txs.len().saturating_sub(num_included);
+
+        qos_service.accumulate_estimated_transaction_costs(
+            &Self::accumulate_batched_transaction_costs(
+                tx_costs.iter(),
+                transactions_qos_results.iter(),
+            ),
+        );
+        (
+            transactions_qos_results,
+            cost_model_throttled_transactions_count,
+        )
+    }
+
+    /// Returns the bundle batch, where a batch must be a list of transactions locked sequentially
+    /// and contiguously. If there are any irrecoverable errors that would result in a piece of the
+    /// bundle being dropped, drop the entire thing.
+    ///
+    /// Assumptions:
+    /// - transactions_qos_results is all Ok(()) since anything that exceeds block limit in a bundle
+    ///   will cause the entire bundle to be dropped.
+    /// - AccountLoadedTwice or TooManyAccountLocks are irrecoverable errors and the entire bundle
+    ///   should be dropped. Ideally this is caught upstream of here too.
+    fn get_bundle_batch<'a>(
+        bank: &'a Arc<Bank>,
+        chunk: &'a [SanitizedTransaction],
+        transactions_qos_results: Vec<Result<(), TransactionError>>,
+    ) -> BundleExecutionResult<TransactionBatch<'a, 'a>> {
+        // lock results can be: Ok, AccountInUse, BundleNotContinuous, AccountLoadedTwice, or TooManyAccountLocks
+        // AccountLoadedTwice and TooManyAccountLocks are irrecoverable errors
+        // AccountInUse and BundleNotContinuous are acceptable
+        let batch = bank.prepare_sequential_sanitized_batch_with_results(
+            chunk,
+            transactions_qos_results.into_iter(),
+        );
+
+        for r in batch.lock_results() {
+            match r {
+                Ok(())
+                | Err(TransactionError::AccountInUse)
+                | Err(TransactionError::BundleNotContinuous) => {}
+                Err(e) => {
+                    return Err(e.clone().into());
+                }
+            }
+        }
+        Ok(batch)
+    }
+
+    /// Executes a bundle, where all transactions in the bundle are executed all-or-nothing.
+    ///
+    /// Notes:
+    /// - Transactions are streamed out in the form of entries as they're produced instead of
+    /// all-at-once like other blockchains.
+    /// - There might be multiple entries for a given bundle because there might be shared state that's
+    /// written to in multiple transactions, which can't be parallelized.
+    /// - We have some knowledge of when the slot will end, but it's not known how long ahead of
+    /// time it'll take to execute a bundle.
+    ///
+    /// Assumptions:
+    /// - Bundles are executed all-or-nothing. There shall never be a situation where the back half
+    ///   of a bundle is dropped.
+    /// - Bundles can contain any number of transactions, potentially from multiple signers.
+    /// - Bundles are not executed across block boundaries.
+    /// - All other non-vote pipelines are locked while bundles are running. (Note: this might
+    ///   interfere with bundles that contain vote accounts bc the cache state might be incorrect).
+    ///
+    /// Given the above, there's a few things we need to do unique to normal transaction processing:
+    /// - Execute all transactions in the bundle before sending to PoH.
+    /// - In order to prevent being on a fork, we need to make sure that the transactions are
+    ///   recorded to PoH successfully before committing them to the bank.
+    /// - All of the records produced are batch sent to PoH and PoH will report back success only
+    ///   if all transactions are recorded. If all transactions are recorded according to PoH, only
+    ///   then will the transactions be committed to the bank.
+    /// - When executing a transaction, the account state is loaded from accountsdb. Transaction n
+    ///   might depend on state from transaction n-1, but that state isn't committed to the bank yet
+    ///   because it hasn't run through poh yet. Therefore, we need to add the concept of an accounts
+    ///   cache that saves the state of accounts from transaction n-1. When loading accounts in the
+    ///   bundle execution stage, it'll bias towards loading from the cache to have the most recent
+    ///   state.
+    fn execute_bundle(
+        transactions: Vec<SanitizedTransaction>,
+        bank: &Arc<Bank>,
+        bank_creation_time: &Arc<Instant>,
+        recorder: &TransactionRecorder,
+        transaction_status_sender: &Option<TransactionStatusSender>,
+        _gossip_vote_sender: &ReplayVoteSender,
+        qos_service: &QosService,
+        _banking_stage_stats: &BankingStageStats,
+        _slot_metrics_tracker: &LeaderSlotMetricsTracker,
+    ) -> BundleExecutionResult<()> {
+        let mut chunk_start = 0;
+
+        let mut cached_accounts = HashMap::with_capacity(20);
+
+        let mut execution_results = Vec::new();
+        while chunk_start != transactions.len() {
+            if !Bank::should_bank_still_be_processing_txs(bank_creation_time, bank.ns_per_slot) {
+                return Err(PohRecorderError::MaxHeightReached.into());
+            }
+
+            // *********************************************************************************
+            // Prepare batch for execution
+            // *********************************************************************************
+            let chunk_end = std::cmp::min(
+                transactions.len(),
+                chunk_start + MAX_NUM_TRANSACTIONS_PER_BATCH,
+            );
+            let chunk = &transactions[chunk_start..chunk_end];
+
+            let (
+                (transactions_qos_results, cost_model_throttled_transactions_count),
+                cost_model_time,
+            ) = Measure::this(
+                |_| Self::get_transaction_qos_results(qos_service, chunk, bank),
+                (),
+                "cost_model",
+            );
+
+            if cost_model_throttled_transactions_count > 0 {
+                return Err(BundleExecutionError::ExceedsCostModel);
+            }
+
+            // NOTE: accounts are unlocked when batch is dropped (if method exits out early)
+            let batch = Self::get_bundle_batch(bank, chunk, transactions_qos_results)?;
+            Self::check_bundle_batch_ok(&batch)?;
+
+            let processing_end = batch.lock_results().iter().position(|lr| lr.is_err());
+            if let Some(end) = processing_end {
+                chunk_start += end;
+            } else {
+                chunk_start = chunk_end;
+            }
+
+            // *********************************************************************************
+            // Execute batch
+            // *********************************************************************************
+            let mut execute_and_commit_timings = LeaderExecuteAndCommitTimings::default();
+            let mut mint_decimals: HashMap<Pubkey, u8> = HashMap::new();
+
+            let ((pre_balances, pre_token_balances), collect_balances_time) = Measure::this(
+                |_| {
+                    let pre_balances = if transaction_status_sender.is_some() {
+                        bank.collect_balances(&batch)
+                    } else {
+                        vec![]
+                    };
+
+                    let pre_token_balances = if transaction_status_sender.is_some() {
+                        collect_token_balances(bank, &batch, &mut mint_decimals)
+                    } else {
+                        vec![]
+                    };
+
+                    (pre_balances, pre_token_balances)
+                },
+                (),
+                "collect_balances",
+            );
+            execute_and_commit_timings.collect_balances_us = collect_balances_time.as_us();
+
+            let (load_and_execute_transactions_output, load_execute_time) = Measure::this(
+                |_| {
+                    bank.load_and_execute_transactions(
+                        &batch,
+                        MAX_PROCESSING_AGE,
+                        transaction_status_sender.is_some(),
+                        transaction_status_sender.is_some(),
+                        &mut execute_and_commit_timings.execute_timings,
+                        None,
+                    )
+                },
+                (),
+                "load_execute",
+            );
+            execute_and_commit_timings.load_execute_us = load_execute_time.as_us();
+
+            Self::check_all_executed_ok(
+                &batch,
+                &load_and_execute_transactions_output.execution_results,
+            )?;
+
+            // *********************************************************************************
+            // Cache results so next iterations of bundle execution can load cached state
+            // instead of using AccountsDB which contains stale execution data.
+            // *********************************************************************************
+            Self::cache_accounts(&mut cached_accounts, &load_and_execute_transactions_output);
+
+            execution_results.push((
+                load_and_execute_transactions_output,
+                batch.sanitized_transactions().to_vec(),
+            ));
+            drop(batch);
+        }
+
+        // *********************************************************************************
+        // All transactions are executed in the bundle.
+        // Record to PoH and send the saved execution results to the Bank.
+        // Note: Ensure that bank.commit_transactions is called on a per-batch basis and
+        // not all together
+        // *********************************************************************************
+
+        // let mixins_txs = execution_results
+        //     .iter()
+        //     .map(|(output, sanitized_txs)| {
+        //         let executed_txs: Vec<VersionedTransaction> = output
+        //             .execution_results
+        //             .iter()
+        //             .zip(sanitized_txs)
+        //             .filter_map(|(r, tx)| match r.was_executed() {
+        //                 true => Some(tx.to_versioned_transaction()),
+        //                 false => None,
+        //             })
+        //             .collect();
+        //         let mixin = hash_transactions(&executed_txs[..]);
+        //         (mixin, executed_txs)
+        //     })
+        //     .collect();
+
+        // recorder.record_bundle(bank.slot(), mixins_txs)?;
+
+        // bank.commit_transactions(
+        //     sanitized_txs,
+        //     &mut loaded_transactions,
+        //     execution_results,
+        //     executed_transactions_count as u64,
+        //     executed_transactions_count
+        //         .saturating_sub(executed_with_successful_result_count)
+        //         as u64,
+        //     signature_count,
+        //     &mut execute_and_commit_timings.execute_timings,
+        // )
+
+        Ok(())
+    }
+
+    /// Note: This is a little confusing and relies on logic elsewhere in the codebase.
+    ///
+    /// Goal:
+    /// - Bundle execution shall be all or nothing. If any transaction within a bundle fails, the entire
+    ///   bundle shall be rolled back.
+    /// - We also want all transactions in the bundle to land in the same slot.
+    ///
+    /// Cache:
+    /// - Allows us to cache account state and use it during execution without fully committing to AccountsDB.
+    /// - If any part of bundle fails, we can bail out early without worry about what was committed to the bank.
+    /// - We can also record all-or-nothing to PoH and only commit to bank if the slot is correct.
+    ///
+    /// Assumptions:
+    /// - There are modifications directly to Accounts outside of the VM. This mainly includes rent, but
+    ///   may be more complex in the future.
+    /// - Before transactions are executed, the fees are subtracted in Bank::load_and_execute_transactions
+    ///   when accounts are being loaded (and will not be executed if fee higher than balance +
+    ///   minimum rent balance).
+    /// - After the batch is processed and recoded to PoH, `Bank::commit_transactions` runs and subtracts
+    ///   the fee from (successful || nonce) transactions in `Accounts::store_cached` and in non-successful
+    ///   transactions in `Bank::filter_program_errors_and_collect_fee`
+    ///
+    /// - We need to save all executed + successful transactions to the cache.
+    /// - If a transaction was executed but not successful, we need to simulate a fee subtraction and
+    ///   cache that here.
+    fn cache_accounts(
+        cached_accounts: &mut HashMap<Pubkey, AccountSharedData>,
+        load_and_execute_transactions_output: &LoadAndExecuteTransactionsOutput,
+    ) {
+        let loaded_txs = &load_and_execute_transactions_output.loaded_transactions;
+        let exec_results = &load_and_execute_transactions_output.execution_results;
+
+        for (tx, exec_result) in loaded_txs.iter().zip(exec_results.iter()) {
+            if exec_result.was_executed() {
+                if exec_result.was_executed_successfully() {
+                    tx.0.as_ref()
+                        .unwrap()
+                        .accounts
+                        .iter()
+                        .for_each(|(pubkey, data)| {
+                            cached_accounts.insert(*pubkey, data.clone());
+                        });
+                } else {
+                    // TODO (LB): subtract fee from these accounts
+                    // NOTE: we do assume that there are no failures allow in a transaction bundle,
+                    // so perhaps we don't need to implement this case.
+                    todo!();
+                }
+            }
+        }
+    }
+
+    /// Return an Error if a transaction was executed
+    fn check_all_executed_ok(
+        _batch: &TransactionBatch,
+        execution_results: &[TransactionExecutionResult],
+    ) -> BundleExecutionResult<()> {
+        let maybe_err = execution_results
+            .iter()
+            .find(|er| er.was_executed() && !er.was_executed_successfully());
+        if let Some(TransactionExecutionResult::Executed(details)) = maybe_err {
+            match &details.status {
+                Ok(_) => {
+                    unreachable!();
+                }
+                Err(e) => return Err(e.clone().into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Checks that preparing a bundle gives an acceptable batch back
+    fn check_bundle_batch_ok(batch: &TransactionBatch) -> BundleExecutionResult<()> {
+        // Ok, AccountInUse, BundleNotContinuous, AccountLoadedTwice, or TooManyAccountLocks
+        let maybe_err = batch.lock_results().iter().find(|lr| {
+            !matches!(
+                lr,
+                Ok(())
+                    | Err(TransactionError::AccountInUse)
+                    | Err(TransactionError::BundleNotContinuous)
+            )
+        });
+        if let Some(Err(e)) = maybe_err {
+            Err(e.clone().into())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn bundle_stage(
+        poh_recorder: &Arc<Mutex<PohRecorder>>,
+        transaction_status_sender: Option<TransactionStatusSender>,
+        bundle_receiver: Receiver<Vec<Bundle>>,
+        gossip_vote_sender: ReplayVoteSender,
+        id: u32,
+        cost_model: Arc<RwLock<CostModel>>,
+    ) {
+        let recorder = poh_recorder.lock().unwrap().recorder();
+        let banking_stage_stats = BankingStageStats::new(id);
+        let mut slot_metrics_tracker = LeaderSlotMetricsTracker::new(id);
+        let qos_service = QosService::new(cost_model, id);
+
+        loop {
+            let bundles = bundle_receiver.recv();
+            if let Err(e) = bundles {
+                error!("exiting [error={}]", e);
+                break;
+            }
+            let bundles = bundles.unwrap();
+
+            // Skip execution of bundles if not leader yet
+            let poh_recorder_bank = poh_recorder.lock().unwrap().get_poh_recorder_bank();
+            let working_bank_start = poh_recorder_bank.working_bank_start();
+            if PohRecorder::get_working_bank_if_not_expired(&working_bank_start).is_none() {
+                error!(
+                    "dropping bundle, not leader yet [num_bundles={}]",
+                    bundles.len()
+                );
+                continue;
+            }
+
+            let BankStart {
+                working_bank,
+                bank_creation_time,
+            } = &*working_bank_start.unwrap();
+
+            // Process + send one bundle at a time
+            // TODO (LB): probably want to lock all the other tx procesing pipelines (except votes) until this is done
+            for bundle in bundles {
+                let bundle_txs = Self::get_bundles(bundle, working_bank);
+                match Self::execute_bundle(
+                    bundle_txs,
+                    working_bank,
+                    bank_creation_time,
+                    &recorder,
+                    &transaction_status_sender,
+                    &gossip_vote_sender,
+                    &qos_service,
+                    &banking_stage_stats,
+                    &slot_metrics_tracker,
+                ) {
+                    Ok(_) => {}
+                    Err(BundleExecutionError::BankNotProcessingTransactions) => {
+                        error!("bank not processing txs");
+                    }
+                    Err(BundleExecutionError::PohError(err)) => {
+                        error!("poh err: {:?}", err);
+                        // TODO (LB): might need bundles to be re-staged? TBD
+                        if matches!(err, PohRecorderError::MaxHeightReached) {
+                            error!("dropping the rest of the bundles");
+                            break;
+                        }
+                    }
+                    Err(BundleExecutionError::NoRecordsToRecord) => {
+                        error!("no records to record");
+                    }
+                    Err(BundleExecutionError::TransactionFailure(e)) => {
+                        error!("transaction in bundle failed to execute: {}", e);
+                    }
+                    Err(BundleExecutionError::ExceedsCostModel) => {
+                        error!("bundle exceeded cost model");
+                    }
+                }
+            }
+        }
+    }
+
+    fn get_bundles(bundle: Bundle, bank: &Arc<Bank>) -> Vec<SanitizedTransaction> {
+        let packet_indexes = Self::generate_packet_indexes(&bundle.packets.packets);
+        let (transactions, _) = Self::transactions_from_packets(
+            &bundle.packets,
+            &packet_indexes,
+            &bank.feature_set,
+            bank.vote_only_bank(),
+            bank.as_ref(),
+        );
+        transactions
     }
 
     fn filter_valid_packets_for_forwarding<'a>(
@@ -945,7 +1422,7 @@ impl BankingStage {
 
     #[allow(clippy::too_many_arguments)]
     fn process_loop(
-        verified_receiver: &CrossbeamReceiver<Vec<PacketBatch>>,
+        verified_receiver: &Receiver<Vec<PacketBatch>>,
         poh_recorder: &Arc<Mutex<PohRecorder>>,
         cluster_info: &ClusterInfo,
         recv_start: &mut Instant,
@@ -1060,14 +1537,12 @@ impl BankingStage {
         )
     }
 
-    #[allow(clippy::match_wild_err_arm)]
-    fn record_transactions(
-        bank_slot: Slot,
+    fn prepare_poh_record_single(
+        bank_slot: &Slot,
         txs: &[SanitizedTransaction],
         execution_results: &[TransactionExecutionResult],
-        recorder: &TransactionRecorder,
-    ) -> RecordTransactionsSummary {
-        let mut record_transactions_timings = RecordTransactionsTimings::default();
+        record_transactions_timings: &mut RecordTransactionsTimings,
+    ) -> (Option<Record>, Vec<usize>) {
         let (
             (processed_transactions, processed_transactions_indexes),
             execution_results_to_transactions_time,
@@ -1087,31 +1562,58 @@ impl BankingStage {
                     .unzip()
             },
             (),
-            " execution_results_to_transactions",
+            "execution_results_to_transactions",
         );
         record_transactions_timings.execution_results_to_transactions_us =
             execution_results_to_transactions_time.as_us();
-
-        let num_to_commit = processed_transactions.len();
-        debug!("num_to_commit: {} ", num_to_commit);
-        // unlock all the accounts with errors which are filtered by the above `filter_map`
         if !processed_transactions.is_empty() {
-            inc_new_counter_info!("banking_stage-record_count", 1);
-            inc_new_counter_info!("banking_stage-record_transactions", num_to_commit);
-
             let (hash, hash_time) = Measure::this(
                 |_| hash_transactions(&processed_transactions[..]),
                 (),
                 "hash",
             );
             record_transactions_timings.hash_us = hash_time.as_us();
+            (
+                Some(Record::Single {
+                    mixin: hash,
+                    transactions: processed_transactions,
+                    slot: *bank_slot,
+                }),
+                processed_transactions_indexes,
+            )
+        } else {
+            (None, vec![])
+        }
+    }
+
+    fn prepare_poh_record_batch() -> Option<Record> {
+        None
+    }
+
+    #[allow(clippy::match_wild_err_arm)]
+    fn record_transactions(
+        bank_slot: Slot,
+        txs: &[SanitizedTransaction],
+        execution_results: &[TransactionExecutionResult],
+        recorder: &TransactionRecorder,
+    ) -> RecordTransactionsSummary {
+        let mut record_transactions_timings = RecordTransactionsTimings::default();
+
+        let (record, processed_transactions_indexes) = Self::prepare_poh_record_single(
+            &bank_slot,
+            txs,
+            execution_results,
+            &mut record_transactions_timings,
+        );
+
+        let num_to_commit = 5;
+
+        if let Some(record) = record {
+            inc_new_counter_info!("banking_stage-record_count", 1);
+            inc_new_counter_info!("banking_stage-record_transactions", num_to_commit); // TODO (LB)
 
             // record and unlock will unlock all the successful transactions
-            let (res, poh_record_time) = Measure::this(
-                |_| recorder.record(bank_slot, hash, processed_transactions),
-                (),
-                "hash",
-            );
+            let (res, poh_record_time) = Measure::this(|_| recorder.record(record), (), "hash");
             record_transactions_timings.poh_record_us = poh_record_time.as_us();
 
             match res {
@@ -1148,6 +1650,10 @@ impl BankingStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: &ReplayVoteSender,
     ) -> ExecuteAndCommitTransactionsOutput {
+        // ********************
+        // Execution Start
+        // ********************
+
         let mut execute_and_commit_timings = LeaderExecuteAndCommitTimings::default();
         let mut mint_decimals: HashMap<Pubkey, u8> = HashMap::new();
 
@@ -1184,6 +1690,7 @@ impl BankingStage {
                     transaction_status_sender.is_some(),
                     transaction_status_sender.is_some(),
                     &mut execute_and_commit_timings.execute_timings,
+                    None,
                 )
             },
             (),
@@ -1200,6 +1707,14 @@ impl BankingStage {
             signature_count,
             ..
         } = load_and_execute_transactions_output;
+
+        // ********************
+        // Execution Stop
+        // ********************
+
+        // ********************
+        // Record start
+        // ********************
 
         let (freeze_lock, freeze_lock_time) =
             Measure::this(|_| bank.freeze_lock(), (), "freeze_lock");
@@ -1246,6 +1761,14 @@ impl BankingStage {
                 execute_and_commit_timings,
             };
         }
+
+        // ********************
+        // Record stop
+        // ********************
+
+        // ********************
+        // Commit start
+        // ********************
 
         let sanitized_txs = batch.sanitized_transactions();
         let committed_transaction_count = commit_transactions_result.unwrap();
@@ -1307,6 +1830,10 @@ impl BankingStage {
             0
         };
 
+        // ********************
+        // Commit stop
+        // ********************
+
         drop(freeze_lock);
 
         debug!(
@@ -1344,26 +1871,7 @@ impl BankingStage {
     ) -> ProcessTransactionBatchOutput {
         let ((transactions_qos_results, cost_model_throttled_transactions_count), cost_model_time) =
             Measure::this(
-                |_| {
-                    let tx_costs = qos_service.compute_transaction_costs(txs.iter());
-
-                    let (transactions_qos_results, num_included) =
-                        qos_service.select_transactions_per_cost(txs.iter(), tx_costs.iter(), bank);
-
-                    let cost_model_throttled_transactions_count =
-                        txs.len().saturating_sub(num_included);
-
-                    qos_service.accumulate_estimated_transaction_costs(
-                        &Self::accumulate_batched_transaction_costs(
-                            tx_costs.iter(),
-                            transactions_qos_results.iter(),
-                        ),
-                    );
-                    (
-                        transactions_qos_results,
-                        cost_model_throttled_transactions_count,
-                    )
-                },
+                |_| Self::get_transaction_qos_results(qos_service, txs, bank),
                 (),
                 "cost_model",
             );
@@ -1912,7 +2420,7 @@ impl BankingStage {
     #[allow(clippy::too_many_arguments)]
     /// Receive incoming packets, push into unprocessed buffer with packet indexes
     fn receive_and_buffer_packets(
-        verified_receiver: &CrossbeamReceiver<Vec<PacketBatch>>,
+        verified_receiver: &Receiver<Vec<PacketBatch>>,
         recv_start: &mut Instant,
         recv_timeout: Duration,
         id: u32,
@@ -2110,7 +2618,7 @@ mod tests {
         },
         solana_perf::packet::{to_packet_batches, PacketFlags},
         solana_poh::{
-            poh_recorder::{create_test_recorder, Record, WorkingBankEntry},
+            poh_recorder::{create_test_recorder, Record, RecordReceiver, WorkingBankEntry},
             poh_service::PohService,
         },
         solana_program_runtime::timings::ProgramTiming,
@@ -2888,7 +3396,7 @@ mod tests {
     }
 
     fn simulate_poh(
-        record_receiver: CrossbeamReceiver<Record>,
+        record_receiver: RecordReceiver,
         poh_recorder: &Arc<Mutex<PohRecorder>>,
     ) -> JoinHandle<()> {
         let poh_recorder = poh_recorder.clone();

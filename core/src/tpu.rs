@@ -195,6 +195,7 @@ impl Tpu {
             cluster_confirmed_slot_sender,
         );
 
+        let (tx, rx) = unbounded();
         let banking_stage = BankingStage::new(
             cluster_info,
             poh_recorder,
@@ -204,6 +205,7 @@ impl Tpu {
             transaction_status_sender,
             replay_vote_sender,
             cost_model.clone(),
+            rx,
         );
 
         let broadcast_stage = broadcast_type.new_broadcast_stage(

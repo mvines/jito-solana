@@ -44,7 +44,8 @@ fn check_txs(
     let now = Instant::now();
     let mut no_bank = false;
     loop {
-        if let Ok((_bank, (entry, _tick_height))) = receiver.recv_timeout(Duration::from_millis(10))
+        if let Ok(WorkingBankEntry::Single((_bank, (entry, _tick_height)))) =
+            receiver.recv_timeout(Duration::from_millis(10))
         {
             total += entry.transactions.len();
         }
@@ -237,6 +238,7 @@ fn main() {
             SocketAddrSpace::Unspecified,
         );
         let cluster_info = Arc::new(cluster_info);
+        let (tx, rx) = unbounded();
         let banking_stage = BankingStage::new(
             &cluster_info,
             &poh_recorder,
@@ -246,6 +248,7 @@ fn main() {
             None,
             replay_vote_sender,
             Arc::new(RwLock::new(CostModel::default())),
+            rx,
         );
         poh_recorder.lock().unwrap().set_bank(&bank);
 

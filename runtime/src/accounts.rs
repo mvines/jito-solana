@@ -238,6 +238,7 @@ impl Accounts {
         error_counters: &mut ErrorCounters,
         rent_collector: &RentCollector,
         feature_set: &FeatureSet,
+        cached_accounts: Option<&HashMap<Pubkey, AccountSharedData>>,
     ) -> Result<LoadedTransaction> {
         // Copy all the accounts
         let message = tx.message();
@@ -269,24 +270,34 @@ impl Accounts {
                                 .is_active(&feature_set::instructions_sysvar_owned_by_sysvar::id()),
                         )
                     } else {
-                        let (account, rent) = self
-                            .accounts_db
-                            .load_with_fixed_root(ancestors, key)
-                            .map(|(mut account, _)| {
-                                if message.is_writable(i) {
-                                    let rent_due = rent_collector
-                                        .collect_from_existing_account(
-                                            key,
-                                            &mut account,
-                                            self.accounts_db.filler_account_suffix.as_ref(),
-                                        )
-                                        .rent_amount;
-                                    (account, rent_due)
-                                } else {
-                                    (account, 0)
-                                }
-                            })
-                            .unwrap_or_default();
+                        let cached_account =
+                            cached_accounts.unwrap_or(&HashMap::new()).get(key).cloned();
+                        let (account, rent) = {
+                            let account = match cached_account {
+                                None => self
+                                    .accounts_db
+                                    .load_with_fixed_root(ancestors, key)
+                                    .map(|(account, _)| account),
+                                Some(acc) => Some(acc),
+                            };
+
+                            account
+                                .map(|mut acc| {
+                                    return if message.is_writable(i) {
+                                        let rent = rent_collector
+                                            .collect_from_existing_account(
+                                                key,
+                                                &mut acc,
+                                                self.accounts_db.filler_account_suffix.as_ref(),
+                                            )
+                                            .rent_amount;
+                                        (acc, rent)
+                                    } else {
+                                        (acc, 0)
+                                    };
+                                })
+                                .unwrap_or_default()
+                        };
 
                         if bpf_loader_upgradeable::check_id(account.owner()) {
                             if message.is_writable(i) && !message.is_upgradeable_loader_present() {
@@ -490,6 +501,7 @@ impl Accounts {
         rent_collector: &RentCollector,
         feature_set: &FeatureSet,
         fee_structure: &FeeStructure,
+        cached_accounts: Option<&HashMap<Pubkey, AccountSharedData>>,
     ) -> Vec<TransactionLoadResult> {
         txs.iter()
             .zip(lock_results)
@@ -519,6 +531,7 @@ impl Accounts {
                         error_counters,
                         rent_collector,
                         feature_set,
+                        cached_accounts,
                     ) {
                         Ok(loaded_transaction) => loaded_transaction,
                         Err(e) => return (Err(e), None),
@@ -1051,6 +1064,22 @@ impl Accounts {
         self.lock_accounts_inner(tx_account_locks_results)
     }
 
+    pub fn lock_accounts_sequential_with_results<'a>(
+        &self,
+        txs: impl Iterator<Item = &'a SanitizedTransaction>,
+        results: impl Iterator<Item = Result<()>>,
+        feature_set: &FeatureSet,
+    ) -> Vec<Result<()>> {
+        let tx_account_locks_results: Vec<Result<_>> = txs
+            .zip(results)
+            .map(|(tx, result)| match result {
+                Ok(()) => tx.get_account_locks(feature_set),
+                Err(err) => Err(err),
+            })
+            .collect();
+        self.lock_accounts_sequential_inner(tx_account_locks_results)
+    }
+
     #[must_use]
     #[allow(clippy::needless_collect)]
     pub fn lock_accounts_with_results<'a>(
@@ -1083,6 +1112,35 @@ impl Accounts {
                     tx_account_locks.writable,
                     tx_account_locks.readonly,
                 ),
+                Err(err) => Err(err),
+            })
+            .collect()
+    }
+
+    #[must_use]
+    fn lock_accounts_sequential_inner(
+        &self,
+        tx_account_locks_results: Vec<Result<TransactionAccountLocks>>,
+    ) -> Vec<Result<()>> {
+        let account_locks = &mut self.account_locks.lock().unwrap();
+        let mut account_in_use_set = false;
+        tx_account_locks_results
+            .into_iter()
+            .map(|tx_account_locks_result| match tx_account_locks_result {
+                Ok(tx_account_locks) => match account_in_use_set {
+                    true => Err(TransactionError::BundleNotContinuous),
+                    false => {
+                        let locked = self.lock_account(
+                            account_locks,
+                            tx_account_locks.writable,
+                            tx_account_locks.readonly,
+                        );
+                        if matches!(locked, Err(TransactionError::AccountInUse)) {
+                            account_in_use_set = true;
+                        }
+                        locked
+                    }
+                },
                 Err(err) => Err(err),
             })
             .collect()
@@ -1131,7 +1189,7 @@ impl Accounts {
         lamports_per_signature: u64,
         leave_nonce_on_success: bool,
     ) {
-        let accounts_to_store = self.collect_accounts_to_store(
+        let accounts_to_store = Self::collect_accounts_to_store(
             txs,
             res,
             loaded,
@@ -1157,7 +1215,6 @@ impl Accounts {
 
     #[allow(clippy::too_many_arguments)]
     fn collect_accounts_to_store<'a>(
-        &self,
         txs: &'a [SanitizedTransaction],
         execution_results: &'a [TransactionExecutionResult],
         load_results: &'a mut [TransactionLoadResult],
@@ -2941,7 +2998,7 @@ mod tests {
         }
         let txs = vec![tx0, tx1];
         let execution_results = vec![new_execution_result(Ok(()), None); 2];
-        let collected_accounts = accounts.collect_accounts_to_store(
+        let collected_accounts = Accounts::collect_accounts_to_store(
             &txs,
             &execution_results,
             loaded.as_mut_slice(),
@@ -3370,7 +3427,7 @@ mod tests {
             )),
             nonce.as_ref(),
         )];
-        let collected_accounts = accounts.collect_accounts_to_store(
+        let collected_accounts = Accounts::collect_accounts_to_store(
             &txs,
             &execution_results,
             loaded.as_mut_slice(),
@@ -3479,7 +3536,7 @@ mod tests {
             )),
             nonce.as_ref(),
         )];
-        let collected_accounts = accounts.collect_accounts_to_store(
+        let collected_accounts = Accounts::collect_accounts_to_store(
             &txs,
             &execution_results,
             loaded.as_mut_slice(),
@@ -3749,4 +3806,6 @@ mod tests {
             ));
         }
     }
+
+    // TODO (LB): add tests for cached accounts
 }
