@@ -10,7 +10,6 @@ use {
             GossipVerifiedVoteHashSender, VerifiedVoteSender, VoteTracker,
         },
         fetch_stage::FetchStage,
-        find_packet_sender_stake_stage::FindPacketSenderStakeStage,
         sigverify::TransactionSigVerifier,
         sigverify_stage::SigVerifyStage,
     },
@@ -60,8 +59,6 @@ pub struct Tpu {
     cluster_info_vote_listener: ClusterInfoVoteListener,
     broadcast_stage: BroadcastStage,
     tpu_quic_t: thread::JoinHandle<()>,
-    find_packet_sender_stake_stage: FindPacketSenderStakeStage,
-    vote_find_packet_sender_stake_stage: FindPacketSenderStakeStage,
 }
 
 impl Tpu {
@@ -89,6 +86,8 @@ impl Tpu {
         cluster_confirmed_slot_sender: GossipDuplicateConfirmedSlotsSender,
         cost_model: &Arc<RwLock<CostModel>>,
         keypair: &Keypair,
+        tpu_proxy_address: Option<SocketAddr>,
+        tpu_proxy_forward_address: Option<SocketAddr>,
         validator_interface_address: Option<SocketAddr>,
     ) -> Self {
         let TpuSockets {
@@ -111,26 +110,6 @@ impl Tpu {
             poh_recorder,
             tpu_coalesce_ms,
         );
-
-        let (find_packet_sender_stake_sender, find_packet_sender_stake_receiver) = unbounded();
-
-        let find_packet_sender_stake_stage = FindPacketSenderStakeStage::new(
-            packet_receiver,
-            find_packet_sender_stake_sender,
-            bank_forks.clone(),
-            cluster_info.clone(),
-        );
-
-        let (vote_find_packet_sender_stake_sender, vote_find_packet_sender_stake_receiver) =
-            unbounded();
-
-        let vote_find_packet_sender_stake_stage = FindPacketSenderStakeStage::new(
-            vote_packet_receiver,
-            vote_find_packet_sender_stake_sender,
-            bank_forks.clone(),
-            cluster_info.clone(),
-        );
-
         let (verified_sender, verified_receiver) = unbounded();
         let recv_verified_sender = verified_sender.clone();
 
@@ -146,7 +125,7 @@ impl Tpu {
 
         let sigverify_stage = {
             let verifier = TransactionSigVerifier::default();
-            SigVerifyStage::new(find_packet_sender_stake_receiver, verified_sender, verifier)
+            SigVerifyStage::new(packet_receiver, verified_sender, verifier)
         };
 
         let (verified_tpu_vote_packets_sender, verified_tpu_vote_packets_receiver) = unbounded();
@@ -154,27 +133,43 @@ impl Tpu {
         let vote_sigverify_stage = {
             let verifier = TransactionSigVerifier::new_reject_non_vote();
             SigVerifyStage::new(
-                vote_find_packet_sender_stake_receiver,
+                vote_packet_receiver,
                 verified_tpu_vote_packets_sender,
                 verifier,
             )
         };
 
-        // MEV TPU proxy packet injection
         let mut recv_verify_stage = None;
         let mut tpu_proxy_advertiser = None;
-        if let Some(validator_interface_address) = validator_interface_address {
-            let (tpu_notify_sender, tpu_notify_receiver) =
-                unbounded_channel::<(Option<SocketAddr>, Option<SocketAddr>)>();
-            recv_verify_stage = Some(RecvVerifyStage::new(
-                cluster_info.keypair(),
-                validator_interface_address,
-                recv_verified_sender,
-                tpu_notify_sender,
-            ));
-            tpu_proxy_advertiser = Some(TpuProxyAdvertiser::new(cluster_info, tpu_notify_receiver));
-        } else {
-            info!("[MEV] Missing TPU or validator addresses, running without TPU proxy");
+
+        // Jito TPU proxy packet injection
+        match (
+            tpu_proxy_address,
+            tpu_proxy_forward_address,
+            validator_interface_address,
+        ) {
+            (
+                Some(tpu_proxy_address),
+                Some(tpu_proxy_forward_address),
+                Some(validator_interface_address),
+            ) => {
+                let (tpu_notify_sender, tpu_notify_receiver) = unbounded_channel();
+                recv_verify_stage = Some(RecvVerifyStage::new(
+                    cluster_info.keypair(),
+                    validator_interface_address,
+                    recv_verified_sender,
+                    tpu_notify_sender,
+                ));
+                tpu_proxy_advertiser = Some(TpuProxyAdvertiser::new(
+                    tpu_proxy_address,
+                    tpu_proxy_forward_address,
+                    cluster_info,
+                    tpu_notify_receiver,
+                ));
+            }
+            _ => {
+                info!("[Jito] Missing TPU or validator addresses, running without TPU proxy");
+            }
         }
 
         let (verified_gossip_vote_packets_sender, verified_gossip_vote_packets_receiver) =
@@ -227,8 +222,6 @@ impl Tpu {
             cluster_info_vote_listener,
             broadcast_stage,
             tpu_quic_t,
-            find_packet_sender_stake_stage,
-            vote_find_packet_sender_stake_stage,
         }
     }
 
@@ -239,14 +232,13 @@ impl Tpu {
             self.vote_sigverify_stage.join(),
             self.cluster_info_vote_listener.join(),
             self.banking_stage.join(),
-            self.find_packet_sender_stake_stage.join(),
-            self.vote_find_packet_sender_stake_stage.join(),
         ];
-        if let (Some(recv_verify_stage), Some(tpu_proxy_advertiser)) =
-            (self.recv_verify_stage, self.tpu_proxy_advertiser)
-        {
-            results.push(recv_verify_stage.join());
-            results.push(tpu_proxy_advertiser.join());
+        match (self.recv_verify_stage, self.tpu_proxy_advertiser) {
+            (Some(recv_verify_stage), Some(tpu_proxy_advertiser)) => {
+                results.push(recv_verify_stage.join());
+                results.push(tpu_proxy_advertiser.join());
+            }
+            _ => {}
         }
         self.tpu_quic_t.join()?;
         let broadcast_result = self.broadcast_stage.join();

@@ -38,7 +38,7 @@ use {
         blockstore::{
             Blockstore, BlockstoreError, BlockstoreSignals, CompletedSlotsReceiver, PurgeType,
         },
-        blockstore_db::{BlockstoreOptions, BlockstoreRecoveryMode, LedgerColumnOptions},
+        blockstore_db::{BlockstoreAdvancedOptions, BlockstoreOptions, BlockstoreRecoveryMode},
         blockstore_processor::{self, TransactionStatusSender},
         leader_schedule::FixedSchedule,
         leader_schedule_cache::LeaderScheduleCache,
@@ -168,7 +168,9 @@ pub struct ValidatorConfig {
     pub no_wait_for_vote_to_start_leader: bool,
     pub accounts_shrink_ratio: AccountShrinkThreshold,
     pub wait_to_vote_slot: Option<Slot>,
-    pub ledger_column_options: LedgerColumnOptions,
+    pub blockstore_advanced_options: BlockstoreAdvancedOptions,
+    pub tpu_proxy_address: Option<SocketAddr>,
+    pub tpu_proxy_forward_address: Option<SocketAddr>,
     pub validator_interface_address: Option<SocketAddr>,
 }
 
@@ -231,7 +233,9 @@ impl Default for ValidatorConfig {
             accounts_shrink_ratio: AccountShrinkThreshold::default(),
             accounts_db_config: None,
             wait_to_vote_slot: None,
-            ledger_column_options: LedgerColumnOptions::default(),
+            blockstore_advanced_options: BlockstoreAdvancedOptions::default(),
+            tpu_proxy_address: None,
+            tpu_proxy_forward_address: None,
             validator_interface_address: None,
         }
     }
@@ -341,6 +345,8 @@ pub struct Validator {
     pub bank_forks: Arc<RwLock<BankForks>>,
     accountsdb_repl_service: Option<AccountsDbReplService>,
     geyser_plugin_service: Option<GeyserPluginService>,
+    pub tpu_proxy_address: Option<SocketAddr>,
+    pub tpu_proxy_forward_address: Option<SocketAddr>,
     pub validator_interface_address: Option<SocketAddr>,
 }
 
@@ -961,6 +967,8 @@ impl Validator {
             cluster_confirmed_slot_sender,
             &cost_model,
             &identity_keypair,
+            config.tpu_proxy_address,
+            config.tpu_proxy_forward_address,
             config.validator_interface_address,
         );
 
@@ -992,6 +1000,8 @@ impl Validator {
             bank_forks,
             accountsdb_repl_service,
             geyser_plugin_service,
+            tpu_proxy_address: config.tpu_proxy_address,
+            tpu_proxy_forward_address: config.tpu_proxy_forward_address,
             validator_interface_address: config.validator_interface_address,
         }
     }
@@ -1302,7 +1312,7 @@ fn load_blockstore(
         ledger_path,
         BlockstoreOptions {
             recovery_mode: config.wal_recovery_mode.clone(),
-            column_options: config.ledger_column_options.clone(),
+            advanced_options: config.blockstore_advanced_options.clone(),
             ..BlockstoreOptions::default()
         },
     )

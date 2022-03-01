@@ -9,7 +9,6 @@ use {
     console::style,
     log::*,
     rand::{seq::SliceRandom, thread_rng},
-    send_transaction_service::DEFAULT_TPU_USE_QUIC,
     solana_clap_utils::{
         input_parsers::{keypair_of, keypairs_of, pubkey_of, value_of},
         input_validators::{
@@ -34,16 +33,13 @@ use {
         contact_info::ContactInfo,
     },
     solana_ledger::blockstore_db::{
-        BlockstoreRecoveryMode, BlockstoreRocksFifoOptions, LedgerColumnOptions, ShredStorageType,
-        DEFAULT_ROCKS_FIFO_SHRED_STORAGE_SIZE_BYTES,
+        BlockstoreAdvancedOptions, BlockstoreRecoveryMode, BlockstoreRocksFifoOptions,
+        ShredStorageType, DEFAULT_ROCKS_FIFO_SHRED_STORAGE_SIZE_BYTES,
     },
     solana_perf::recycler::enable_recycler_warming,
     solana_poh::poh_service,
     solana_replica_lib::accountsdb_repl_server::AccountsDbReplServiceConfig,
-    solana_rpc::{
-        rpc::{JsonRpcConfig, RpcBigtableConfig},
-        rpc_pubsub_service::PubSubConfig,
-    },
+    solana_rpc::{rpc::JsonRpcConfig, rpc_pubsub_service::PubSubConfig},
     solana_runtime::{
         accounts_db::{
             AccountShrinkThreshold, AccountsDbConfig, DEFAULT_ACCOUNTS_SHRINK_OPTIMIZE_TOTAL_SPACE,
@@ -460,7 +456,6 @@ pub fn main() {
     let default_accounts_shrink_ratio = &DEFAULT_ACCOUNTS_SHRINK_RATIO.to_string();
     let default_rocksdb_fifo_shred_storage_size =
         &DEFAULT_ROCKS_FIFO_SHRED_STORAGE_SIZE_BYTES.to_string();
-    let default_tpu_use_quic = &DEFAULT_TPU_USE_QUIC.to_string();
 
     let matches = App::new(crate_name!()).about(crate_description!())
         .version(solana_version::version!())
@@ -1104,7 +1099,6 @@ pub fn main() {
                 .alias("no-untrusted-rpc")
                 .long("only-known-rpc")
                 .takes_value(false)
-                .requires("known_validators")
                 .help("Use the RPC service of known validators only")
         )
         .arg(
@@ -1148,14 +1142,6 @@ pub fn main() {
                 .takes_value(true)
                 .validator(is_parsable::<u64>)
                 .help("Milliseconds to wait in the TPU receiver for packet coalescing."),
-        )
-        .arg(
-            Arg::with_name("tpu_use_quic")
-                .long("tpu-use-quic")
-                .takes_value(true)
-                .value_name("BOOLEAN")
-                .default_value(default_tpu_use_quic)
-                .help("When this is set to true, the system will use QUIC to send transactions."),
         )
         .arg(
             Arg::with_name("rocksdb_max_compaction_jitter")
@@ -1208,14 +1194,6 @@ pub fn main() {
                 .takes_value(true)
                 .default_value("30")
                 .help("Number of seconds before timing out RPC requests backed by BigTable"),
-        )
-        .arg(
-            Arg::with_name("rpc_bigtable_instance_name")
-                .long("rpc-bigtable-instance-name")
-                .takes_value(true)
-                .value_name("INSTANCE_NAME")
-                .default_value(solana_storage_bigtable::DEFAULT_INSTANCE_NAME)
-                .help("Name of the Bigtable instance to upload to")
         )
         .arg(
             Arg::with_name("rpc_pubsub_worker_threads")
@@ -1648,6 +1626,22 @@ pub fn main() {
                 .takes_value(false)
                 .help("Allow contacting private ip addresses")
                 .hidden(true),
+        )
+        .arg(
+            Arg::with_name("tpu_proxy_address")
+                .long("tpu_proxy_address")
+                .value_name("TPU_PROXY_ADDRESS")
+                .required(true)
+                .takes_value(true)
+                .help("TPU proxy listening address")
+        )
+        .arg(
+            Arg::with_name("tpu_proxy_forward_address")
+                .long("tpu_proxy_forward_address")
+                .value_name("TPU_PROXY_FORWARD_ADDRESS")
+                .required(true)
+                .takes_value(true)
+                .help("TPU forward proxy listening address")
         )
         .arg(
             Arg::with_name("validator_interface_address")
@@ -2124,8 +2118,6 @@ pub fn main() {
     let restricted_repair_only_mode = matches.is_present("restricted_repair_only_mode");
     let accounts_shrink_optimize_total_space =
         value_t_or_exit!(matches, "accounts_shrink_optimize_total_space", bool);
-    let tpu_use_quic = value_t_or_exit!(matches, "tpu_use_quic", bool);
-
     let shrink_ratio = value_t_or_exit!(matches, "accounts_shrink_ratio", f64);
     if !(0.0..=1.0).contains(&shrink_ratio) {
         eprintln!(
@@ -2293,20 +2285,6 @@ pub fn main() {
         warn!("--minimal-rpc-api is now the default behavior. This flag is deprecated and can be removed from the launch args")
     }
 
-    let rpc_bigtable_config = if matches.is_present("enable_rpc_bigtable_ledger_storage")
-        || matches.is_present("enable_bigtable_ledger_upload")
-    {
-        Some(RpcBigtableConfig {
-            enable_bigtable_ledger_upload: matches.is_present("enable_bigtable_ledger_upload"),
-            bigtable_instance_name: value_t_or_exit!(matches, "rpc_bigtable_instance_name", String),
-            timeout: value_t!(matches, "rpc_bigtable_timeout", u64)
-                .ok()
-                .map(Duration::from_secs),
-        })
-    } else {
-        None
-    };
-
     let mut validator_config = ValidatorConfig {
         require_tower: matches.is_present("require_tower"),
         tower_storage,
@@ -2322,7 +2300,9 @@ pub fn main() {
         rpc_config: JsonRpcConfig {
             enable_rpc_transaction_history: matches.is_present("enable_rpc_transaction_history"),
             enable_cpi_and_log_storage: matches.is_present("enable_cpi_and_log_storage"),
-            rpc_bigtable_config,
+            enable_bigtable_ledger_storage: matches
+                .is_present("enable_rpc_bigtable_ledger_storage"),
+            enable_bigtable_ledger_upload: matches.is_present("enable_bigtable_ledger_upload"),
             faucet_addr: matches.value_of("rpc_faucet_addr").map(|address| {
                 solana_net_utils::parse_host_port(address).expect("failed to parse faucet address")
             }),
@@ -2340,6 +2320,9 @@ pub fn main() {
             ),
             rpc_threads: value_t_or_exit!(matches, "rpc_threads", usize),
             rpc_niceness_adj: value_t_or_exit!(matches, "rpc_niceness_adj", i8),
+            rpc_bigtable_timeout: value_t!(matches, "rpc_bigtable_timeout", u64)
+                .ok()
+                .map(Duration::from_secs),
             account_indexes: account_indexes.clone(),
             rpc_scan_and_fix_roots: matches.is_present("rpc_scan_and_fix_roots"),
         },
@@ -2406,7 +2389,6 @@ pub fn main() {
                 "rpc_send_transaction_service_max_retries",
                 usize
             ),
-            use_quic: tpu_use_quic,
         },
         no_poh_speed_test: matches.is_present("no_poh_speed_test"),
         no_os_memory_stats_reporting: matches.is_present("no_os_memory_stats_reporting"),
@@ -2424,6 +2406,14 @@ pub fn main() {
         tpu_coalesce_ms,
         no_wait_for_vote_to_start_leader: matches.is_present("no_wait_for_vote_to_start_leader"),
         accounts_shrink_ratio,
+        tpu_proxy_address: solana_net_utils::parse_host_port(
+            matches.value_of("tpu_proxy_address").unwrap_or(""),
+        )
+        .ok(),
+        tpu_proxy_forward_address: solana_net_utils::parse_host_port(
+            matches.value_of("tpu_proxy_forward_address").unwrap_or(""),
+        )
+        .ok(),
         validator_interface_address: solana_net_utils::parse_host_port(
             matches
                 .value_of("validator_interface_address")
@@ -2614,7 +2604,7 @@ pub fn main() {
         validator_config.max_ledger_shreds = Some(limit_ledger_size);
     }
 
-    validator_config.ledger_column_options = LedgerColumnOptions {
+    validator_config.blockstore_advanced_options = BlockstoreAdvancedOptions {
         shred_storage_type: match matches.value_of("rocksdb_shred_compaction") {
             None => ShredStorageType::default(),
             Some(shred_compaction_string) => match shred_compaction_string {
