@@ -169,8 +169,6 @@ pub struct ValidatorConfig {
     pub accounts_shrink_ratio: AccountShrinkThreshold,
     pub wait_to_vote_slot: Option<Slot>,
     pub blockstore_advanced_options: BlockstoreAdvancedOptions,
-    pub tpu_proxy_address: Option<SocketAddr>,
-    pub tpu_proxy_forward_address: Option<SocketAddr>,
     pub validator_interface_address: Option<SocketAddr>,
 }
 
@@ -234,8 +232,6 @@ impl Default for ValidatorConfig {
             accounts_db_config: None,
             wait_to_vote_slot: None,
             blockstore_advanced_options: BlockstoreAdvancedOptions::default(),
-            tpu_proxy_address: None,
-            tpu_proxy_forward_address: None,
             validator_interface_address: None,
         }
     }
@@ -967,8 +963,6 @@ impl Validator {
             cluster_confirmed_slot_sender,
             &cost_model,
             &identity_keypair,
-            config.tpu_proxy_address,
-            config.tpu_proxy_forward_address,
             config.validator_interface_address,
         );
 
