@@ -341,8 +341,6 @@ pub struct Validator {
     pub bank_forks: Arc<RwLock<BankForks>>,
     accountsdb_repl_service: Option<AccountsDbReplService>,
     geyser_plugin_service: Option<GeyserPluginService>,
-    pub tpu_proxy_address: Option<SocketAddr>,
-    pub tpu_proxy_forward_address: Option<SocketAddr>,
     pub validator_interface_address: Option<SocketAddr>,
 }
 
@@ -994,8 +992,6 @@ impl Validator {
             bank_forks,
             accountsdb_repl_service,
             geyser_plugin_service,
-            tpu_proxy_address: config.tpu_proxy_address,
-            tpu_proxy_forward_address: config.tpu_proxy_forward_address,
             validator_interface_address: config.validator_interface_address,
         }
     }

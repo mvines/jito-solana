@@ -1,6 +1,7 @@
 use {
     rand::{thread_rng, Rng},
     solana_sdk::clock::Slot,
+    solana_transaction_status::ConfirmedBlock,
     std::time::Instant,
     tokio::task::JoinHandle,
 };
