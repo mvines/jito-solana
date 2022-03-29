@@ -33,6 +33,7 @@ use {
     },
     solana_program_runtime::timings::ExecuteTimings,
     solana_runtime::{
+        accounts::TransactionLoadResult,
         accounts_db::ErrorCounters,
         bank::{
             Bank, LoadAndExecuteTransactionsOutput, TransactionBalancesSet, TransactionCheckResult,
@@ -619,6 +620,7 @@ impl BankingStage {
         _slot_metrics_tracker: &LeaderSlotMetricsTracker,
     ) -> BundleExecutionResult<()> {
         let mut chunk_start = 0;
+        let mut execute_and_commit_timings = LeaderExecuteAndCommitTimings::default();
 
         let mut cached_accounts = HashMap::with_capacity(20);
 
@@ -639,7 +641,7 @@ impl BankingStage {
 
             let (
                 (transactions_qos_results, cost_model_throttled_transactions_count),
-                cost_model_time,
+                _cost_model_time,
             ) = Measure::this(
                 |_| Self::get_transaction_qos_results(qos_service, chunk, bank),
                 (),
@@ -664,31 +666,10 @@ impl BankingStage {
             // *********************************************************************************
             // Execute batch
             // *********************************************************************************
-            let mut execute_and_commit_timings = LeaderExecuteAndCommitTimings::default();
-            let mut mint_decimals: HashMap<Pubkey, u8> = HashMap::new();
 
-            let ((pre_balances, pre_token_balances), collect_balances_time) = Measure::this(
-                |_| {
-                    let pre_balances = if transaction_status_sender.is_some() {
-                        bank.collect_balances(&batch)
-                    } else {
-                        vec![]
-                    };
+            // TODO: add pre and post-balance checks that use the cached_accounts instead of the bank
 
-                    let pre_token_balances = if transaction_status_sender.is_some() {
-                        collect_token_balances(bank, &batch, &mut mint_decimals)
-                    } else {
-                        vec![]
-                    };
-
-                    (pre_balances, pre_token_balances)
-                },
-                (),
-                "collect_balances",
-            );
-            execute_and_commit_timings.collect_balances_us = collect_balances_time.as_us();
-
-            let (load_and_execute_transactions_output, load_execute_time) = Measure::this(
+            let (mut load_and_execute_transactions_output, load_execute_time) = Measure::this(
                 |_| {
                     bank.load_and_execute_transactions(
                         &batch,
@@ -705,15 +686,24 @@ impl BankingStage {
             execute_and_commit_timings.load_execute_us = load_execute_time.as_us();
 
             Self::check_all_executed_ok(
-                &batch,
-                &load_and_execute_transactions_output.execution_results,
+                &load_and_execute_transactions_output
+                    .execution_results
+                    .as_slice(),
             )?;
 
             // *********************************************************************************
             // Cache results so next iterations of bundle execution can load cached state
             // instead of using AccountsDB which contains stale execution data.
             // *********************************************************************************
-            Self::cache_accounts(&mut cached_accounts, &load_and_execute_transactions_output);
+            Self::cache_accounts(
+                bank,
+                &batch.sanitized_transactions(),
+                &load_and_execute_transactions_output.execution_results,
+                &mut load_and_execute_transactions_output.loaded_transactions,
+                &mut cached_accounts,
+            );
+
+            // TODO (LB): collect post-balances from cached accounts
 
             execution_results.push((
                 load_and_execute_transactions_output,
@@ -729,95 +719,47 @@ impl BankingStage {
         // not all together
         // *********************************************************************************
 
-        // let mixins_txs = execution_results
-        //     .iter()
-        //     .map(|(output, sanitized_txs)| {
-        //         let executed_txs: Vec<VersionedTransaction> = output
-        //             .execution_results
-        //             .iter()
-        //             .zip(sanitized_txs)
-        //             .filter_map(|(r, tx)| match r.was_executed() {
-        //                 true => Some(tx.to_versioned_transaction()),
-        //                 false => None,
-        //             })
-        //             .collect();
-        //         let mixin = hash_transactions(&executed_txs[..]);
-        //         (mixin, executed_txs)
-        //     })
-        //     .collect();
+        let (freeze_lock, _freeze_lock_time) =
+            Measure::this(|_| bank.freeze_lock(), (), "freeze_lock");
 
-        // recorder.record_bundle(bank.slot(), mixins_txs)?;
+        let record = Self::prepare_poh_record_bundle(&bank.slot(), &execution_results);
+        recorder.record(record)?;
 
-        // bank.commit_transactions(
-        //     sanitized_txs,
-        //     &mut loaded_transactions,
-        //     execution_results,
-        //     executed_transactions_count as u64,
-        //     executed_transactions_count
-        //         .saturating_sub(executed_with_successful_result_count)
-        //         as u64,
-        //     signature_count,
-        //     &mut execute_and_commit_timings.execute_timings,
-        // )
+        for (mut output, sanitized_txs) in execution_results {
+            let _result = bank.commit_transactions(
+                &sanitized_txs,
+                &mut output.loaded_transactions,
+                output.execution_results,
+                output.executed_transactions_count as u64,
+                output
+                    .executed_transactions_count
+                    .saturating_sub(output.executed_with_successful_result_count)
+                    as u64,
+                output.signature_count,
+                &mut execute_and_commit_timings.execute_timings,
+            );
+        }
+
+        drop(freeze_lock);
 
         Ok(())
     }
 
-    /// Note: This is a little confusing and relies on logic elsewhere in the codebase.
-    ///
-    /// Goal:
-    /// - Bundle execution shall be all or nothing. If any transaction within a bundle fails, the entire
-    ///   bundle shall be rolled back.
-    /// - We also want all transactions in the bundle to land in the same slot.
-    ///
-    /// Cache:
-    /// - Allows us to cache account state and use it during execution without fully committing to AccountsDB.
-    /// - If any part of bundle fails, we can bail out early without worry about what was committed to the bank.
-    /// - We can also record all-or-nothing to PoH and only commit to bank if the slot is correct.
-    ///
-    /// Assumptions:
-    /// - There are modifications directly to Accounts outside of the VM. This mainly includes rent, but
-    ///   may be more complex in the future.
-    /// - Before transactions are executed, the fees are subtracted in Bank::load_and_execute_transactions
-    ///   when accounts are being loaded (and will not be executed if fee higher than balance +
-    ///   minimum rent balance).
-    /// - After the batch is processed and recoded to PoH, `Bank::commit_transactions` runs and subtracts
-    ///   the fee from (successful || nonce) transactions in `Accounts::store_cached` and in non-successful
-    ///   transactions in `Bank::filter_program_errors_and_collect_fee`
-    ///
-    /// - We need to save all executed + successful transactions to the cache.
-    /// - If a transaction was executed but not successful, we need to simulate a fee subtraction and
-    ///   cache that here.
     fn cache_accounts(
+        bank: &Arc<Bank>,
+        txs: &[SanitizedTransaction],
+        res: &[TransactionExecutionResult],
+        loaded: &mut [TransactionLoadResult],
         cached_accounts: &mut HashMap<Pubkey, AccountSharedData>,
-        load_and_execute_transactions_output: &LoadAndExecuteTransactionsOutput,
     ) {
-        let loaded_txs = &load_and_execute_transactions_output.loaded_transactions;
-        let exec_results = &load_and_execute_transactions_output.execution_results;
-
-        for (tx, exec_result) in loaded_txs.iter().zip(exec_results.iter()) {
-            if exec_result.was_executed() {
-                if exec_result.was_executed_successfully() {
-                    tx.0.as_ref()
-                        .unwrap()
-                        .accounts
-                        .iter()
-                        .for_each(|(pubkey, data)| {
-                            cached_accounts.insert(*pubkey, data.clone());
-                        });
-                } else {
-                    // TODO (LB): subtract fee from these accounts
-                    // NOTE: we do assume that there are no failures allow in a transaction bundle,
-                    // so perhaps we don't need to implement this case.
-                    todo!();
-                }
-            }
+        let accounts = bank.collect_accounts_to_store(txs, res, loaded);
+        for (pubkey, data) in accounts {
+            cached_accounts.insert(*pubkey, data.clone());
         }
     }
 
     /// Return an Error if a transaction was executed
     fn check_all_executed_ok(
-        _batch: &TransactionBatch,
         execution_results: &[TransactionExecutionResult],
     ) -> BundleExecutionResult<()> {
         let maybe_err = execution_results
@@ -862,7 +804,7 @@ impl BankingStage {
     ) {
         let recorder = poh_recorder.lock().unwrap().recorder();
         let banking_stage_stats = BankingStageStats::new(id);
-        let mut slot_metrics_tracker = LeaderSlotMetricsTracker::new(id);
+        let slot_metrics_tracker = LeaderSlotMetricsTracker::new(id);
         let qos_service = QosService::new(cost_model, id);
 
         loop {
@@ -1586,8 +1528,33 @@ impl BankingStage {
         }
     }
 
-    fn prepare_poh_record_batch() -> Option<Record> {
-        None
+    fn prepare_poh_record_bundle(
+        bank_slot: &Slot,
+        execution_results_txs: &Vec<(LoadAndExecuteTransactionsOutput, Vec<SanitizedTransaction>)>,
+    ) -> Record {
+        let mixins_txs = execution_results_txs
+            .iter()
+            .map(|(output, txs)| {
+                let processed_transactions: Vec<VersionedTransaction> = output
+                    .execution_results
+                    .iter()
+                    .zip(txs)
+                    .filter_map(|(execution_result, tx)| {
+                        if execution_result.was_executed() {
+                            Some(tx.to_versioned_transaction())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let hash = hash_transactions(&processed_transactions[..]);
+                (hash, processed_transactions)
+            })
+            .collect();
+        Record::Bundle {
+            mixins_txs,
+            slot: *bank_slot,
+        }
     }
 
     #[allow(clippy::match_wild_err_arm)]
@@ -1610,7 +1577,7 @@ impl BankingStage {
 
         if let Some(record) = record {
             inc_new_counter_info!("banking_stage-record_count", 1);
-            inc_new_counter_info!("banking_stage-record_transactions", num_to_commit); // TODO (LB)
+            inc_new_counter_info!("banking_stage-record_transactions", num_to_commit);
 
             // record and unlock will unlock all the successful transactions
             let (res, poh_record_time) = Measure::this(|_| recorder.record(record), (), "hash");

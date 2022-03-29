@@ -4488,6 +4488,24 @@ impl Bank {
         }
     }
 
+    pub fn collect_accounts_to_store<'a>(
+        &self,
+        txs: &'a [SanitizedTransaction],
+        res: &'a [TransactionExecutionResult],
+        loaded: &'a mut [TransactionLoadResult],
+    ) -> Vec<(&'a Pubkey, &'a AccountSharedData)> {
+        let (blockhash, lamports_per_signature) = self.last_blockhash_and_lamports_per_signature();
+        Accounts::collect_accounts_to_store(
+            txs,
+            res,
+            loaded,
+            &self.rent_collector,
+            &blockhash,
+            lamports_per_signature,
+            self.leave_nonce_on_success(),
+        )
+    }
+
     // Distribute collected rent fees for this slot to staked validators (excluding stakers)
     // according to stake.
     //
