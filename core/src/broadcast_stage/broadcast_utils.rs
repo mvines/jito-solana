@@ -41,21 +41,17 @@ pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result
     let recv_start = Instant::now();
     let (mut bank, entries_ticks) = receiver.recv_timeout(timer)?;
 
-    let mut entries: Vec<Entry> = entries_ticks.iter().map(|(e, _)| e.clone()).collect();
-
+    let mut max_tick_height = bank.max_tick_height();
     let mut slot = bank.slot();
 
-    let mut max_tick_height = bank.max_tick_height();
+    let ticks: Vec<u64> = entries_ticks.iter().map(|(_, tick)| *tick).collect();
+    let mut highest_entry_tick = *ticks.iter().max().unwrap();
+    assert!(highest_entry_tick <= max_tick_height);
 
-    // all entries shall be from the same slot
-    assert!(entries_ticks
-        .iter()
-        .all(|(_, tick)| *tick <= max_tick_height));
+    let mut entries: Vec<Entry> = entries_ticks.into_iter().map(|(e, _)| e).collect();
 
-    if !entries_ticks
-        .iter()
-        .any(|(_, tick)| *tick == max_tick_height)
-    {
+    // drain channel if not at max tick height for this slot yet
+    if !ticks.iter().any(|t| *t == max_tick_height) {
         while let Ok((try_bank, entries_ticks)) = receiver.try_recv() {
             if try_bank.slot() != slot {
                 warn!("Broadcast for slot: {} interrupted", bank.slot());
@@ -64,10 +60,12 @@ pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result
                 slot = bank.slot();
                 max_tick_height = bank.max_tick_height();
             }
-            let highest_entry_tick = entries_ticks.iter().last().unwrap().1;
+
+            let ticks: Vec<u64> = entries_ticks.iter().map(|(_, tick)| *tick).collect();
+            highest_entry_tick = *ticks.iter().max().unwrap();
 
             entries.extend(entries_ticks.into_iter().map(|(entry, _)| entry));
-            if entries.len() > RECEIVE_ENTRY_COUNT_THRESHOLD {
+            if entries.len() >= RECEIVE_ENTRY_COUNT_THRESHOLD {
                 break;
             }
 
@@ -82,7 +80,7 @@ pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result
         entries,
         time_elapsed: recv_start.elapsed(),
         bank,
-        last_tick_height: 0,
+        last_tick_height: highest_entry_tick,
     })
 }
 
