@@ -202,12 +202,10 @@ impl PohService {
                     .unwrap()
                     .record(slot, mixin, transactions),
 
-                Record::Bundle {
-                    mixins_txs: _,
-                    slot: _,
-                } => {
-                    todo!()
-                }
+                Record::Bundle { mixins_txs, slot } => poh_recorder
+                    .lock()
+                    .unwrap()
+                    .record_bundle(slot, &mixins_txs),
             };
             if sender.send(res).is_err() {
                 panic!("Error returning mixin hash");
@@ -273,9 +271,9 @@ impl PohService {
                             slot,
                         } => poh_recorder_l.record(slot, mixin, std::mem::take(transactions)),
                         Record::Bundle {
-                            mixins_txs: _,
-                            slot: _,
-                        } => Ok(()),
+                            ref mixins_txs,
+                            slot,
+                        } => poh_recorder_l.record_bundle(slot, mixins_txs),
                     };
                     // what do we do on failure here? Ignore for now.
                     let (_send_res, send_record_result_time) =

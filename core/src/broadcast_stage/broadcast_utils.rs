@@ -1,5 +1,5 @@
 use {
-    crate::result::{Error::BundleNotSupported, Result},
+    crate::result::Result,
     crossbeam_channel::Receiver,
     solana_entry::entry::Entry,
     solana_ledger::shred::Shred,
@@ -39,59 +39,50 @@ const RECEIVE_ENTRY_COUNT_THRESHOLD: usize = 8;
 pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result<ReceiveResults> {
     let timer = Duration::new(1, 0);
     let recv_start = Instant::now();
-    // let (mut bank, (entry, mut last_tick_height)) = receiver.recv_timeout(timer)?;
-    let wbe = receiver.recv_timeout(timer)?;
+    let (bank, entries_ticks) = receiver.recv_timeout(timer)?;
 
-    let (mut bank, entry, mut last_tick_height) =
-        if let WorkingBankEntry::Single((bank, (entry, last_tick_height))) =
-            wbe.try_into().map_err(|_| BundleNotSupported)?
-        {
-            (bank, entry, last_tick_height)
-        } else {
-            todo!()
-        };
-
-    let mut entries = vec![entry];
-    let mut slot = bank.slot();
-    let mut max_tick_height = bank.max_tick_height();
-
-    assert!(last_tick_height <= max_tick_height);
-
-    if last_tick_height != max_tick_height {
-        while let Ok(WorkingBankEntry::Single((try_bank, (entry, tick_height)))) = receiver
-            .try_recv()
-            .try_into()
-            .map_err(|_| BundleNotSupported)?
-        {
-            // If the bank changed, that implies the previous slot was interrupted and we do not have to
-            // broadcast its entries.
-            if try_bank.slot() != slot {
-                warn!("Broadcast for slot: {} interrupted", bank.slot());
-                entries.clear();
-                bank = try_bank;
-                slot = bank.slot();
-                max_tick_height = bank.max_tick_height();
-            }
-            last_tick_height = tick_height;
-            entries.push(entry);
-
-            if entries.len() >= RECEIVE_ENTRY_COUNT_THRESHOLD {
-                break;
-            }
-
-            assert!(last_tick_height <= max_tick_height);
-            if last_tick_height == max_tick_height {
-                break;
-            }
-        }
-    }
-
-    let time_elapsed = recv_start.elapsed();
+    // let mut slot = bank.slot();
+    // let mut max_tick_height = bank.max_tick_height();
+    //
+    // assert!(last_tick_height <= max_tick_height);
+    //
+    // if last_tick_height != max_tick_height {
+    //     while let Ok((try_bank, entries_ticks)) = receiver.try_recv()? {
+    //         // If the bank changed, that implies the previous slot was interrupted and we do not have to
+    //         // broadcast its entries.
+    //         if try_bank.slot() != slot {
+    //             warn!("Broadcast for slot: {} interrupted", bank.slot());
+    //             entries.clear();
+    //             bank = try_bank;
+    //             slot = bank.slot();
+    //             max_tick_height = bank.max_tick_height();
+    //         }
+    //         last_tick_height = tick_height;
+    //         entries.push(entry);
+    //
+    //         if entries.len() >= RECEIVE_ENTRY_COUNT_THRESHOLD {
+    //             break;
+    //         }
+    //
+    //         assert!(last_tick_height <= max_tick_height);
+    //         if last_tick_height == max_tick_height {
+    //             break;
+    //         }
+    //     }
+    // }
+    //
+    // let time_elapsed = recv_start.elapsed();
+    // Ok(ReceiveResults {
+    //     entries,
+    //     time_elapsed,
+    //     bank,
+    //     last_tick_height,
+    // })
     Ok(ReceiveResults {
-        entries,
-        time_elapsed,
+        entries: vec![],
+        time_elapsed: Default::default(),
         bank,
-        last_tick_height,
+        last_tick_height: 0,
     })
 }
 

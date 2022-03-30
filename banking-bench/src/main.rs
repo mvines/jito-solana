@@ -44,10 +44,11 @@ fn check_txs(
     let now = Instant::now();
     let mut no_bank = false;
     loop {
-        if let Ok(WorkingBankEntry::Single((_bank, (entry, _tick_height)))) =
-            receiver.recv_timeout(Duration::from_millis(10))
-        {
-            total += entry.transactions.len();
+        if let Ok((_bank, entries_ticks)) = receiver.recv_timeout(Duration::from_millis(10)) {
+            total += entries_ticks
+                .iter()
+                .map(|e| e.0.transactions.len())
+                .sum::<usize>();
         }
         if total >= ref_tx_count {
             break;

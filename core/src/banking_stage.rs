@@ -1573,7 +1573,7 @@ impl BankingStage {
             &mut record_transactions_timings,
         );
 
-        let num_to_commit = 5;
+        let num_to_commit = processed_transactions_indexes.len();
 
         if let Some(record) = record {
             inc_new_counter_info!("banking_stage-record_count", 1);
