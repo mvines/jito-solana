@@ -39,48 +39,48 @@ const RECEIVE_ENTRY_COUNT_THRESHOLD: usize = 8;
 pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result<ReceiveResults> {
     let timer = Duration::new(1, 0);
     let recv_start = Instant::now();
-    let (bank, entries_ticks) = receiver.recv_timeout(timer)?;
+    let (mut bank, entries_ticks) = receiver.recv_timeout(timer)?;
 
-    // let mut slot = bank.slot();
-    // let mut max_tick_height = bank.max_tick_height();
-    //
-    // assert!(last_tick_height <= max_tick_height);
-    //
-    // if last_tick_height != max_tick_height {
-    //     while let Ok((try_bank, entries_ticks)) = receiver.try_recv()? {
-    //         // If the bank changed, that implies the previous slot was interrupted and we do not have to
-    //         // broadcast its entries.
-    //         if try_bank.slot() != slot {
-    //             warn!("Broadcast for slot: {} interrupted", bank.slot());
-    //             entries.clear();
-    //             bank = try_bank;
-    //             slot = bank.slot();
-    //             max_tick_height = bank.max_tick_height();
-    //         }
-    //         last_tick_height = tick_height;
-    //         entries.push(entry);
-    //
-    //         if entries.len() >= RECEIVE_ENTRY_COUNT_THRESHOLD {
-    //             break;
-    //         }
-    //
-    //         assert!(last_tick_height <= max_tick_height);
-    //         if last_tick_height == max_tick_height {
-    //             break;
-    //         }
-    //     }
-    // }
-    //
-    // let time_elapsed = recv_start.elapsed();
-    // Ok(ReceiveResults {
-    //     entries,
-    //     time_elapsed,
-    //     bank,
-    //     last_tick_height,
-    // })
+    let mut entries: Vec<Entry> = entries_ticks.iter().map(|(e, _)| e.clone()).collect();
+
+    let mut slot = bank.slot();
+
+    let mut max_tick_height = bank.max_tick_height();
+
+    // all entries shall be from the same slot
+    assert!(entries_ticks
+        .iter()
+        .all(|(_, tick)| *tick <= max_tick_height));
+
+    if !entries_ticks
+        .iter()
+        .any(|(_, tick)| *tick == max_tick_height)
+    {
+        while let Ok((try_bank, entries_ticks)) = receiver.try_recv() {
+            if try_bank.slot() != slot {
+                warn!("Broadcast for slot: {} interrupted", bank.slot());
+                entries.clear();
+                bank = try_bank;
+                slot = bank.slot();
+                max_tick_height = bank.max_tick_height();
+            }
+            let highest_entry_tick = entries_ticks.iter().last().unwrap().1;
+
+            entries.extend(entries_ticks.into_iter().map(|(entry, _)| entry));
+            if entries.len() > RECEIVE_ENTRY_COUNT_THRESHOLD {
+                break;
+            }
+
+            assert!(highest_entry_tick <= max_tick_height);
+            if highest_entry_tick == max_tick_height {
+                break;
+            }
+        }
+    }
+
     Ok(ReceiveResults {
-        entries: vec![],
-        time_elapsed: Default::default(),
+        entries,
+        time_elapsed: recv_start.elapsed(),
         bank,
         last_tick_height: 0,
     })
