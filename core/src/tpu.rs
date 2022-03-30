@@ -195,7 +195,7 @@ impl Tpu {
             cluster_confirmed_slot_sender,
         );
 
-        let (tx, rx) = unbounded();
+        let (_tx, rx) = unbounded();
         let banking_stage = BankingStage::new(
             cluster_info,
             poh_recorder,

@@ -244,7 +244,7 @@ impl PohService {
         target_ns_per_tick: u64,
     ) -> bool {
         match next_record_and_sender.take() {
-            Some((mut record, sender)) => {
+            Some((record, sender)) => {
                 // received message to record
                 // so, record for as long as we have queued up record requests
                 let mut lock_time = Measure::start("lock");

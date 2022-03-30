@@ -1043,7 +1043,7 @@ mod tests {
             assert_eq!(poh_recorder.tick_height, tick_height_before + 1);
             assert_eq!(poh_recorder.tick_cache.len(), 0);
             let mut num_entries = 0;
-            while let Ok((wbank, entries_ticks)) = entry_receiver.try_recv() {
+            while let Ok((wbank, _entries_ticks)) = entry_receiver.try_recv() {
                 assert_eq!(wbank.slot(), bank1.slot());
                 num_entries += 1; //entries_ticks
             }
