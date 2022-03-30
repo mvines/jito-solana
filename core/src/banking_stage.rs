@@ -810,7 +810,7 @@ impl BankingStage {
         loop {
             let bundles = bundle_receiver.recv();
             if let Err(e) = bundles {
-                error!("exiting [error={}]", e);
+                debug!("channel disconnected, exiting");
                 break;
             }
             let bundles = bundles.unwrap();
@@ -2652,7 +2652,7 @@ mod tests {
             let cluster_info = Arc::new(cluster_info);
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
 
-            let (_tx, rx) = unbounded();
+            let (bundle_sender, rx) = unbounded();
             let banking_stage = BankingStage::new(
                 &cluster_info,
                 &poh_recorder,
@@ -2667,6 +2667,8 @@ mod tests {
             drop(verified_sender);
             drop(gossip_verified_vote_sender);
             drop(tpu_vote_sender);
+            drop(bundle_sender);
+
             exit.store(true, Ordering::Relaxed);
             banking_stage.join().unwrap();
             poh_service.join().unwrap();
@@ -2703,7 +2705,7 @@ mod tests {
             let (verified_gossip_vote_sender, verified_gossip_vote_receiver) = unbounded();
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
 
-            let (_tx, rx) = unbounded();
+            let (bundle_sender, rx) = unbounded();
             let banking_stage = BankingStage::new(
                 &cluster_info,
                 &poh_recorder,
@@ -2719,6 +2721,7 @@ mod tests {
             drop(verified_sender);
             drop(verified_gossip_vote_sender);
             drop(tpu_vote_sender);
+            drop(bundle_sender);
             exit.store(true, Ordering::Relaxed);
             poh_service.join().unwrap();
             drop(poh_recorder);
@@ -2781,7 +2784,7 @@ mod tests {
             let cluster_info = Arc::new(cluster_info);
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
 
-            let (_tx, rx) = unbounded();
+            let (bundle_sender, rx) = unbounded();
             let banking_stage = BankingStage::new(
                 &cluster_info,
                 &poh_recorder,
@@ -2831,6 +2834,7 @@ mod tests {
             drop(verified_sender);
             drop(tpu_vote_sender);
             drop(gossip_verified_vote_sender);
+            drop(bundle_sender);
             // wait until banking_stage to finish up all packets
             banking_stage.join().unwrap();
 
@@ -3317,7 +3321,7 @@ mod tests {
             let mut done = false;
             // read entries until I find mine, might be ticks...
             while let Ok((_bank, entries_ticks)) = entry_receiver.recv() {
-                assert_eq!(entries_ticks.len(), 0);
+                assert_eq!(entries_ticks.len(), 1);
                 let entry = entries_ticks.get(0).unwrap().0.clone();
                 if !entry.is_tick() {
                     trace!("got entry");
