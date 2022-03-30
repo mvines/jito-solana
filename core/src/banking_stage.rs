@@ -2652,7 +2652,7 @@ mod tests {
             let cluster_info = Arc::new(cluster_info);
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
 
-            let (tx, rx) = unbounded();
+            let (_tx, rx) = unbounded();
             let banking_stage = BankingStage::new(
                 &cluster_info,
                 &poh_recorder,
@@ -2703,7 +2703,7 @@ mod tests {
             let (verified_gossip_vote_sender, verified_gossip_vote_receiver) = unbounded();
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
 
-            let (tx, rx) = unbounded();
+            let (_tx, rx) = unbounded();
             let banking_stage = BankingStage::new(
                 &cluster_info,
                 &poh_recorder,
@@ -2726,7 +2726,8 @@ mod tests {
             trace!("getting entries");
             let entries: Vec<_> = entry_receiver
                 .iter()
-                .map(|(_bank, (entry, _tick_height))| entry)
+                .map(|(_bank, entries_ticks)| entries_ticks.into_iter().map(|e| e.0))
+                .flatten()
                 .collect();
             trace!("done");
             assert_eq!(entries.len(), genesis_config.ticks_per_slot as usize);
@@ -2780,6 +2781,7 @@ mod tests {
             let cluster_info = Arc::new(cluster_info);
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
 
+            let (_tx, rx) = unbounded();
             let banking_stage = BankingStage::new(
                 &cluster_info,
                 &poh_recorder,
@@ -2789,6 +2791,7 @@ mod tests {
                 None,
                 gossip_vote_sender,
                 Arc::new(RwLock::new(CostModel::default())),
+                rx,
             );
 
             // fund another account so we can send 2 good transactions in a single batch.
@@ -2840,9 +2843,10 @@ mod tests {
             bank.process_transaction(&fund_tx).unwrap();
             //receive entries + ticks
             loop {
-                let entries: Vec<Entry> = entry_receiver
+                let entries: Vec<_> = entry_receiver
                     .iter()
-                    .map(|(_bank, (entry, _tick_height))| entry)
+                    .map(|(_bank, entries_ticks)| entries_ticks.into_iter().map(|e| e.0))
+                    .flatten()
                     .collect();
 
                 assert!(entries.verify(&blockhash));
@@ -2930,6 +2934,7 @@ mod tests {
                     create_test_recorder(&bank, &blockstore, Some(poh_config), None);
                 let cluster_info = new_test_cluster_info(Node::new_localhost().info);
                 let cluster_info = Arc::new(cluster_info);
+                let (_tx, rx) = unbounded();
                 let _banking_stage = BankingStage::new_num_threads(
                     &cluster_info,
                     &poh_recorder,
@@ -2940,6 +2945,7 @@ mod tests {
                     None,
                     gossip_vote_sender,
                     Arc::new(RwLock::new(CostModel::default())),
+                    rx,
                 );
 
                 // wait for banking_stage to eat the packets
@@ -2958,7 +2964,8 @@ mod tests {
             // check that the balance is what we expect.
             let entries: Vec<_> = entry_receiver
                 .iter()
-                .map(|(_bank, (entry, _tick_height))| entry)
+                .map(|(_bank, entries_ticks)| entries_ticks.into_iter().map(|e| e.0))
+                .flatten()
                 .collect();
 
             let bank = Bank::new_no_wallclock_throttle_for_tests(&genesis_config);
@@ -3026,7 +3033,9 @@ mod tests {
 
             let mut results = vec![new_execution_result(Ok(())); 2];
             let _ = BankingStage::record_transactions(bank.slot(), &txs, &results, &recorder);
-            let (_bank, (entry, _tick_height)) = entry_receiver.recv().unwrap();
+            let (_bank, entries_ticks) = entry_receiver.recv().unwrap();
+            assert_eq!(entries_ticks.len(), 1);
+            let entry = entries_ticks.get(0).unwrap().0.clone();
             assert_eq!(entry.transactions.len(), txs.len());
 
             // InstructionErrors should still be recorded
@@ -3041,7 +3050,9 @@ mod tests {
             } = BankingStage::record_transactions(bank.slot(), &txs, &results, &recorder);
             result.unwrap();
             assert!(retryable_indexes.is_empty());
-            let (_bank, (entry, _tick_height)) = entry_receiver.recv().unwrap();
+            let (_bank, entries_ticks) = entry_receiver.recv().unwrap();
+            assert_eq!(entries_ticks.len(), 1);
+            let entry = entries_ticks.get(0).unwrap().0.clone();
             assert_eq!(entry.transactions.len(), txs.len());
 
             // Other TransactionErrors should not be recorded
@@ -3053,7 +3064,9 @@ mod tests {
             } = BankingStage::record_transactions(bank.slot(), &txs, &results, &recorder);
             result.unwrap();
             assert!(retryable_indexes.is_empty());
-            let (_bank, (entry, _tick_height)) = entry_receiver.recv().unwrap();
+            let (_bank, entries_ticks) = entry_receiver.recv().unwrap();
+            assert_eq!(entries_ticks.len(), 1);
+            let entry = entries_ticks.get(0).unwrap().0.clone();
             assert_eq!(entry.transactions.len(), txs.len() - 1);
 
             // Once bank is set to a new bank (setting bank.slot() + 1 in record_transactions),
@@ -3303,7 +3316,9 @@ mod tests {
 
             let mut done = false;
             // read entries until I find mine, might be ticks...
-            while let Ok((_bank, (entry, _tick_height))) = entry_receiver.recv() {
+            while let Ok((_bank, entries_ticks)) = entry_receiver.recv() {
+                assert_eq!(entries_ticks.len(), 0);
+                let entry = entries_ticks.get(0).unwrap().0.clone();
                 if !entry.is_tick() {
                     trace!("got entry");
                     assert_eq!(entry.transactions.len(), transactions.len());
