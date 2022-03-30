@@ -612,7 +612,7 @@ impl PohRecorder {
         }
     }
 
-    pub fn record_bundle(
+    pub fn record(
         &mut self,
         bank_slot: Slot,
         mixins_txs: &Vec<(Hash, Vec<VersionedTransaction>)>,

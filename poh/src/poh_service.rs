@@ -195,7 +195,7 @@ impl PohService {
             let res = poh_recorder
                 .lock()
                 .unwrap()
-                .record_bundle(record.slot, &record.mixins_txs);
+                .record(record.slot, &record.mixins_txs);
             if sender.send(res).is_err() {
                 panic!("Error returning mixin hash");
             }
@@ -253,7 +253,7 @@ impl PohService {
                 timing.total_lock_time_ns += lock_time.as_ns();
                 let mut record_time = Measure::start("record");
                 loop {
-                    let res = poh_recorder_l.record_bundle(record.slot, &record.mixins_txs);
+                    let res = poh_recorder_l.record(record.slot, &record.mixins_txs);
                     // what do we do on failure here? Ignore for now.
                     let (_send_res, send_record_result_time) =
                         Measure::this(|_| sender.send(res), (), "send_record_result");
