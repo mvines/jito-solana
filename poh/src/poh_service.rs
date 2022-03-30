@@ -192,21 +192,10 @@ impl PohService {
     ) {
         let record = record_receiver.recv_timeout(timeout);
         if let Ok((record, sender)) = record {
-            let res = match record {
-                Record::Single {
-                    mixin,
-                    transactions,
-                    slot,
-                } => poh_recorder
-                    .lock()
-                    .unwrap()
-                    .record(slot, mixin, transactions),
-
-                Record::Bundle { mixins_txs, slot } => poh_recorder
-                    .lock()
-                    .unwrap()
-                    .record_bundle(slot, &mixins_txs),
-            };
+            let res = poh_recorder
+                .lock()
+                .unwrap()
+                .record_bundle(record.slot, &record.mixins_txs);
             if sender.send(res).is_err() {
                 panic!("Error returning mixin hash");
             }
@@ -264,17 +253,7 @@ impl PohService {
                 timing.total_lock_time_ns += lock_time.as_ns();
                 let mut record_time = Measure::start("record");
                 loop {
-                    let res = match record {
-                        Record::Single {
-                            mixin,
-                            ref mut transactions,
-                            slot,
-                        } => poh_recorder_l.record(slot, mixin, std::mem::take(transactions)),
-                        Record::Bundle {
-                            ref mixins_txs,
-                            slot,
-                        } => poh_recorder_l.record_bundle(slot, mixins_txs),
-                    };
+                    let res = poh_recorder_l.record_bundle(record.slot, &record.mixins_txs);
                     // what do we do on failure here? Ignore for now.
                     let (_send_res, send_record_result_time) =
                         Measure::this(|_| sender.send(res), (), "send_record_result");

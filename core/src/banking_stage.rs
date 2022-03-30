@@ -1516,9 +1516,8 @@ impl BankingStage {
             );
             record_transactions_timings.hash_us = hash_time.as_us();
             (
-                Some(Record::Single {
-                    mixin: hash,
-                    transactions: processed_transactions,
+                Some(Record {
+                    mixins_txs: vec![(hash, processed_transactions)],
                     slot: *bank_slot,
                 }),
                 processed_transactions_indexes,
@@ -1551,7 +1550,7 @@ impl BankingStage {
                 (hash, processed_transactions)
             })
             .collect();
-        Record::Bundle {
+        Record {
             mixins_txs,
             slot: *bank_slot,
         }
