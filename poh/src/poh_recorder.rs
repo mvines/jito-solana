@@ -1041,9 +1041,9 @@ mod tests {
             assert_eq!(poh_recorder.tick_height, tick_height_before + 1);
             assert_eq!(poh_recorder.tick_cache.len(), 0);
             let mut num_entries = 0;
-            while let Ok((wbank, (_entry, _tick_height))) = entry_receiver.try_recv() {
+            while let Ok((wbank, entries_ticks)) = entry_receiver.try_recv() {
                 assert_eq!(wbank.slot(), bank1.slot());
-                num_entries += 1;
+                num_entries += 1; //entries_ticks
             }
 
             // All the cached ticks, plus the new tick above should have been flushed
@@ -1136,7 +1136,7 @@ mod tests {
             // We haven't yet reached the minimum tick height for the working bank,
             // so record should fail
             assert_matches!(
-                poh_recorder.record(bank1.slot(), h1, vec![tx.into()]),
+                poh_recorder.record(bank1.slot(), &vec![(h1, vec![tx.into()])]),
                 Err(PohRecorderError::MinHeightNotReached)
             );
             assert!(entry_receiver.try_recv().is_err());
@@ -1179,7 +1179,7 @@ mod tests {
             // However we hand over a bad slot so record fails
             let bad_slot = bank.slot() + 1;
             assert_matches!(
-                poh_recorder.record(bad_slot, h1, vec![tx.into()]),
+                poh_recorder.record(bad_slot, &vec![(h1, vec![tx.into()])]),
                 Err(PohRecorderError::MaxHeightReached)
             );
         }
@@ -1226,17 +1226,21 @@ mod tests {
             let tx = test_tx();
             let h1 = hash(b"hello world!");
             assert!(poh_recorder
-                .record(bank1.slot(), h1, vec![tx.into()])
+                .record(bank1.slot(), &vec![(h1, vec![tx.into()])])
                 .is_ok());
             assert_eq!(poh_recorder.tick_cache.len(), 0);
 
             //tick in the cache + entry
             for _ in 0..min_tick_height {
-                let (_bank, (e, _tick_height)) = entry_receiver.recv().unwrap();
+                let (_bank, entries_ticks) = entry_receiver.recv().unwrap();
+                assert_eq!(entries_ticks.len(), 1);
+                let e = entries_ticks.get(0).unwrap().0.clone();
                 assert!(e.is_tick());
             }
 
-            let (_bank, (e, _tick_height)) = entry_receiver.recv().unwrap();
+            let (_bank, entries_ticks) = entry_receiver.recv().unwrap();
+            assert_eq!(entries_ticks.len(), 1);
+            let e = entries_ticks.get(0).unwrap().0.clone();
             assert!(!e.is_tick());
         }
         Blockstore::destroy(&ledger_path).unwrap();
@@ -1272,10 +1276,13 @@ mod tests {
             let tx = test_tx();
             let h1 = hash(b"hello world!");
             assert!(poh_recorder
-                .record(bank.slot(), h1, vec![tx.into()])
+                .record(bank.slot(), &vec![(h1, vec![tx.into()])])
                 .is_err());
+
             for _ in 0..num_ticks_to_max {
-                let (_bank, (entry, _tick_height)) = entry_receiver.recv().unwrap();
+                let (_bank, entries_ticks) = entry_receiver.recv().unwrap();
+                assert_eq!(entries_ticks.len(), 1);
+                let entry = entries_ticks.get(0).unwrap().0.clone();
                 assert!(entry.is_tick());
             }
         }
@@ -1531,7 +1538,7 @@ mod tests {
             let tx = test_tx();
             let h1 = hash(b"hello world!");
             assert!(poh_recorder
-                .record(bank.slot(), h1, vec![tx.into()])
+                .record(bank.slot(), &vec![(h1, vec![tx.into()])])
                 .is_err());
             assert!(poh_recorder.working_bank.is_none());
 

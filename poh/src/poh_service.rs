@@ -454,11 +454,10 @@ mod tests {
                         loop {
                             // send some data
                             let mut time = Measure::start("record");
-                            let _ = poh_recorder.lock().unwrap().record(
-                                bank_slot,
-                                h1,
-                                vec![tx.clone()],
-                            );
+                            let _ = poh_recorder
+                                .lock()
+                                .unwrap()
+                                .record(bank_slot, &vec![(h1, vec![tx.clone()])]);
                             time.stop();
                             total_us += time.as_us();
                             total_times += 1;
@@ -503,7 +502,9 @@ mod tests {
 
             let time = Instant::now();
             while run_time != 0 || need_tick || need_entry || need_partial {
-                let (_bank, (entry, _tick_height)) = entry_receiver.recv().unwrap();
+                let (_bank, entries_tricks) = entry_receiver.recv().unwrap();
+                assert_eq!(entries_tricks.len(), 0);
+                let entry = entries_tricks.get(0).unwrap().0.clone();
 
                 if entry.is_tick() {
                     num_ticks += 1;

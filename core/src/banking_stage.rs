@@ -2652,6 +2652,7 @@ mod tests {
             let cluster_info = Arc::new(cluster_info);
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
 
+            let (tx, rx) = unbounded();
             let banking_stage = BankingStage::new(
                 &cluster_info,
                 &poh_recorder,
@@ -2661,6 +2662,7 @@ mod tests {
                 None,
                 gossip_vote_sender,
                 Arc::new(RwLock::new(CostModel::default())),
+                rx,
             );
             drop(verified_sender);
             drop(gossip_verified_vote_sender);
@@ -2701,6 +2703,7 @@ mod tests {
             let (verified_gossip_vote_sender, verified_gossip_vote_receiver) = unbounded();
             let (gossip_vote_sender, _gossip_vote_receiver) = unbounded();
 
+            let (tx, rx) = unbounded();
             let banking_stage = BankingStage::new(
                 &cluster_info,
                 &poh_recorder,
@@ -2710,6 +2713,7 @@ mod tests {
                 None,
                 gossip_vote_sender,
                 Arc::new(RwLock::new(CostModel::default())),
+                rx,
             );
             trace!("sending bank");
             drop(verified_sender);

@@ -1467,6 +1467,7 @@ mod tests {
             rent_collector,
             feature_set,
             fee_structure,
+            None,
         )
     }
 
@@ -3074,6 +3075,7 @@ mod tests {
             &rent_collector,
             &FeatureSet::all_enabled(),
             &FeeStructure::default(),
+            None,
         )
     }
 

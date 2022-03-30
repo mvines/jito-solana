@@ -16969,6 +16969,7 @@ pub(crate) mod tests {
             &bank.rent_collector,
             &bank.feature_set,
             &FeeStructure::default(),
+            None,
         );
 
         let compute_budget = bank
