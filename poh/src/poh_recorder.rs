@@ -636,6 +636,8 @@ impl PohRecorder {
             self.flush_cache_no_tick_us += flush_cache_time.as_us();
             flush_cache_res?;
 
+            info!("loopity doopity");
+
             let working_bank = self
                 .working_bank
                 .as_ref()
