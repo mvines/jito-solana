@@ -15,7 +15,7 @@ pub struct Poh {
     slot_start_time: Instant,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PohEntry {
     pub num_hashes: u64,
     pub hash: Hash,
@@ -75,22 +75,12 @@ impl Poh {
     }
 
     pub fn record(&mut self, mixin: Hash) -> Option<PohEntry> {
-        if self.remaining_hashes == 1 {
-            return None; // Caller needs to `tick()` first
-        }
-
-        self.hash = hashv(&[self.hash.as_ref(), mixin.as_ref()]);
-        let num_hashes = self.num_hashes + 1;
-        self.num_hashes = 0;
-        self.remaining_hashes -= 1;
-
-        Some(PohEntry {
-            num_hashes,
-            hash: self.hash,
-        })
+        self.record_bundle(&vec![mixin])
+            .map(|entries| entries[0].clone())
     }
 
     pub fn record_bundle(&mut self, mixins: &[Hash]) -> Option<Vec<PohEntry>> {
+        // TODO (LB) double check this is right
         if self.remaining_hashes <= mixins.len() as u64 {
             return None; // Caller needs to `tick()` first
         }
