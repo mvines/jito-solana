@@ -91,12 +91,6 @@ while [[ -n $1 ]]; do
     elif [[ $1 == --skip-require-tower ]]; then
       maybeRequireTower=false
       shift
-    elif [[ $1 == --tpu_proxy_address ]]; then
-      args+=("$1" "$2")
-      shift 2
-    elif [[ $1 == --tpu_proxy_forward_address ]]; then
-      args+=("$1" "$2")
-      shift 2
     elif [[ $1 == --validator_interface_address ]]; then
       args+=("$1" "$2")
       shift 2

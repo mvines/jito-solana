@@ -18,7 +18,6 @@ pub enum Error {
     Blockstore(blockstore::BlockstoreError),
     WeightedIndex(rand::distributions::weighted::WeightedError),
     Gossip(GossipError),
-    BundleNotSupported, // TODO(LB): remove
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
