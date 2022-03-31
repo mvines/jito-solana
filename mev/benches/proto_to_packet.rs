@@ -12,7 +12,7 @@ use {
     },
     solana_sdk::packet::{Packet, PACKET_DATA_SIZE},
     std::iter::repeat,
-    test::Bencher,
+    test::{black_box, Bencher},
 };
 
 fn get_proto_packet(i: u8) -> PbPacket {
@@ -35,25 +35,34 @@ fn get_proto_packet(i: u8) -> PbPacket {
 
 #[bench]
 fn bench_proto_to_packet(bencher: &mut Bencher) {
+    bencher.iter(|| {
+        black_box(proto_packet_to_packet(get_proto_packet(1)));
+    });
+}
+
+#[bench]
+fn bench_batch_list_to_packets(bencher: &mut Bencher) {
     let packet_batch_list = PacketBatchList {
         header: None,
-        batch_list: (0..1000)
+        batch_list: (0..100)
             .map(|_| PacketBatch {
                 packets: (0..128).map(|i| get_proto_packet(i)).collect(),
             })
             .collect(),
     };
+
     bencher.iter(|| {
-        // let packets: Vec<Vec<Packet>> = packet_batch_list
-        //     .batch_list
-        //     .iter()
-        //     .map(|b| {
-        //         b.packets
-        //             .iter()
-        //             .map(|p| proto_packet_to_packet(p.clone()))
-        //             .collect()
-        //     })
-        //     .collect();
-        let p = proto_packet_to_packet(get_proto_packet(1));
+        black_box(
+            packet_batch_list
+                .batch_list
+                .iter()
+                .map(|b| {
+                    b.packets
+                        .iter()
+                        .map(|p| proto_packet_to_packet(p.clone()))
+                        .collect()
+                })
+                .collect::<Vec<Vec<Packet>>>(),
+        );
     });
 }
