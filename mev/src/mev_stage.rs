@@ -166,6 +166,7 @@ impl MevStage {
                 biased;
 
                 _ = timeout_interval.tick() => {
+                    debug!("tick");
                     if !heartbeat_sent {
                         heartbeat_sender.send(None).map_err(|_| MevStageError::ChannelError)?;
                     }
@@ -195,12 +196,14 @@ impl MevStage {
                                 .map_err(|_| MevStageError::ChannelError)?;
                         }
                         Msg::Heartbeat(true) => {
+                            debug!("heartbeat");
                             heartbeat_sender
                             .send(Some((tpu.clone(), tpu_fwd.clone())))
                             .map_err(|_| MevStageError::ChannelError)?;
                             heartbeat_sent = true;
                         },
                         Msg::Heartbeat(false) => {
+                            debug!("heartbeat false");
                             heartbeat_sender
                             .send(None)
                             .map_err(|_| MevStageError::ChannelError)?;
@@ -224,6 +227,7 @@ impl MevStage {
         loop {
             tokio::select! {
                 biased;
+                // TODO (LB): should we add heart beat here too?
 
                 response = subscription.message() => {
                     let response = response?.ok_or(MevStageError::GrpcStreamDisconnected)?;
