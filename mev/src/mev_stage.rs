@@ -9,6 +9,7 @@ use {
         proto::{
             packet::PacketBatch as PbPacketBatch,
             validator_interface::{
+                subscribe_packets_response::Msg,
                 validator_interface_client::ValidatorInterfaceClient, GetTpuConfigsRequest,
                 SubscribePacketsRequest,
             },
@@ -65,6 +66,10 @@ pub enum MevStageError {
     BadTpuSocket(#[from] AddrParseError),
     #[error("stream disconnected")]
     PacketStreamDisconnected,
+    #[error("bad packet message")]
+    BadMessage,
+    #[error("error sending message to another part of the system")]
+    ChannelError,
 }
 
 type Result<T> = std::result::Result<T, MevStageError>;
@@ -156,26 +161,36 @@ impl MevStage {
             .await?
             .into_inner();
         loop {
-            let msg = subscription
+            let response = subscription
                 .message()
                 .await?
                 .ok_or(MevStageError::PacketStreamDisconnected)?;
 
-            let packet_batches = msg
-                .batch_list
-                .into_iter()
-                .map(|batch| {
-                    PacketBatch::new(
-                        batch
-                            .packets
-                            .into_iter()
-                            .map(proto_packet_to_packet)
-                            .collect(),
-                    )
-                })
-                .collect();
-            if let Err(e) = verified_packet_sender.send(packet_batches) {
-                error!("error sending packet batches {}", e);
+            match response.msg.ok_or(MevStageError::BadMessage)? {
+                Msg::BatchList(batch_wrapper) => {
+                    let packet_batches = batch_wrapper
+                        .batch_list
+                        .into_iter()
+                        .map(|batch| {
+                            PacketBatch::new(
+                                batch
+                                    .packets
+                                    .into_iter()
+                                    .map(proto_packet_to_packet)
+                                    .collect(),
+                            )
+                        })
+                        .collect();
+                    verified_packet_sender
+                        .send(packet_batches)
+                        .map_err(|_| MevStageError::ChannelError)?;
+                }
+                Msg::Heartbeat(true) => heartbeat_sender
+                    .send(Some((tpu.clone(), tpu_fwd.clone())))
+                    .map_err(|_| MevStageError::ChannelError)?,
+                Msg::Heartbeat(false) => heartbeat_sender
+                    .send(None)
+                    .map_err(|_| MevStageError::ChannelError)?,
             }
         }
     }
