@@ -27,7 +27,10 @@ use {
         time::Duration,
     },
     thiserror::Error,
-    tokio::{runtime::Runtime, time::sleep},
+    tokio::{
+        runtime::Runtime,
+        time::{self, sleep, Interval},
+    },
     tonic::{
         codegen::{http::uri::InvalidUri, InterceptedService, Service},
         metadata::MetadataValue,
@@ -59,6 +62,8 @@ pub enum MevStageError {
     BadMessage,
     #[error("error sending message to another part of the system")]
     ChannelError,
+    #[error("backend sent disconnection through heartbeat")]
+    HeartbeatError,
 }
 
 type Result<T> = std::result::Result<T, MevStageError>;
@@ -106,7 +111,7 @@ impl MevStage {
         verified_packet_sender: Sender<Vec<PacketBatch>>,
         heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
         bundle_sender: Sender<Vec<Bundle>>,
-        i: u64,
+        heartbeat_timeout_ms: u64,
     ) -> Self {
         let msg = b"Let's get this money!".to_vec();
         let sig: Signature = keypair.sign_message(msg.as_slice());
@@ -127,6 +132,7 @@ impl MevStage {
                     verified_packet_sender,
                     heartbeat_sender,
                     bundle_sender,
+                    heartbeat_timeout_ms,
                 )
             })
         });
@@ -144,16 +150,28 @@ impl MevStage {
         tpu: SocketAddr,
         tpu_fwd: SocketAddr,
         verified_packet_sender: Sender<Vec<PacketBatch>>,
+        heartbeat_timeout_ms: u64,
     ) -> Result<()> {
         let mut subscription = client
             .subscribe_packets(SubscribePacketsRequest {})
             .await?
             .into_inner();
+
+        let mut heartbeat_sent = false;
+        let mut timeout_interval = time::interval(Duration::from_millis(heartbeat_timeout_ms));
+
         loop {
             tokio::select! {
+                // biased causes the first branch to be evaluated first as opposed to random
                 biased;
 
-                // TODO (LB): add interval
+                _ = timeout_interval.tick() => {
+                    if !heartbeat_sent {
+                        heartbeat_sender.send(None).map_err(|_| MevStageError::ChannelError)?;
+                    }
+                    heartbeat_sent = false;
+                    return Err(MevStageError::HeartbeatError);
+                }
 
                 response = subscription.message() => {
                     let msg = response?.ok_or(MevStageError::GrpcStreamDisconnected)?.msg.ok_or(MevStageError::BadMessage)?;
@@ -176,12 +194,18 @@ impl MevStage {
                                 .send(packet_batches)
                                 .map_err(|_| MevStageError::ChannelError)?;
                         }
-                        Msg::Heartbeat(true) => heartbeat_sender
+                        Msg::Heartbeat(true) => {
+                            heartbeat_sender
                             .send(Some((tpu.clone(), tpu_fwd.clone())))
-                            .map_err(|_| MevStageError::ChannelError)?,
-                        Msg::Heartbeat(false) => heartbeat_sender
+                            .map_err(|_| MevStageError::ChannelError)?;
+                            heartbeat_sent = true;
+                        },
+                        Msg::Heartbeat(false) => {
+                            heartbeat_sender
                             .send(None)
-                            .map_err(|_| MevStageError::ChannelError)?,
+                            .map_err(|_| MevStageError::ChannelError)?;
+                            return Err(MevStageError::HeartbeatError);
+                        },
                     }
                 }
             }
@@ -227,6 +251,7 @@ impl MevStage {
         heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
         verified_packet_sender: Sender<Vec<PacketBatch>>,
         bundle_sender: Sender<Vec<Bundle>>,
+        heartbeat_timeout_ms: u64,
     ) -> Result<()> {
         let channel = Endpoint::from_shared(validator_interface_address)?
             .connect()
@@ -236,12 +261,15 @@ impl MevStage {
         let (tpu, tpu_fwd) = Self::fetch_tpu_config(&mut client).await?;
 
         let mut handles = vec![];
+
+        // TODO (LB): need to figure out how to handle one dying and the other not
         handles.push(tokio::spawn(Self::packet_streamer_loop(
             client.clone(),
             heartbeat_sender,
             tpu,
             tpu_fwd,
             verified_packet_sender,
+            heartbeat_timeout_ms,
         )));
         handles.push(tokio::spawn(Self::bundle_streamer(client, bundle_sender)));
 
@@ -287,6 +315,7 @@ impl MevStage {
         verified_packet_sender: Sender<Vec<PacketBatch>>,
         heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
         bundle_sender: Sender<Vec<Bundle>>,
+        heartbeat_timeout_ms: u64,
     ) {
         if validator_interface_address.is_none() {
             return;
@@ -303,6 +332,7 @@ impl MevStage {
                 heartbeat_sender.clone(),
                 verified_packet_sender.clone(),
                 bundle_sender.clone(),
+                heartbeat_timeout_ms,
             )
             .await
             {
