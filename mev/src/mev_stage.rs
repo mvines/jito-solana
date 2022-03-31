@@ -6,19 +6,15 @@ use {
     crate::{
         backoff::BackoffStrategy,
         bundle::Bundle,
-        proto::{
-            packet::PacketBatch as PbPacketBatch,
-            validator_interface::{
-                subscribe_packets_response::Msg,
-                validator_interface_client::ValidatorInterfaceClient, GetTpuConfigsRequest,
-                SubscribePacketsRequest,
-            },
+        proto::validator_interface::{
+            subscribe_packets_response::Msg, validator_interface_client::ValidatorInterfaceClient,
+            GetTpuConfigsRequest, SubscribeBundlesRequest, SubscribePacketsRequest,
         },
         proto_packet_to_packet,
     },
     crossbeam_channel::Sender,
     log::*,
-    solana_perf::{cuda_runtime::PinnedVec, packet::PacketBatch},
+    solana_perf::packet::PacketBatch,
     solana_sdk::{
         pubkey::Pubkey,
         signature::{Keypair, Signature},
@@ -31,14 +27,7 @@ use {
         time::Duration,
     },
     thiserror::Error,
-    tokio::{
-        runtime::Runtime,
-        sync::{
-            mpsc,
-            mpsc::{UnboundedReceiver, UnboundedSender},
-        },
-        time::sleep,
-    },
+    tokio::{runtime::Runtime, time::sleep},
     tonic::{
         codegen::{http::uri::InvalidUri, InterceptedService, Service},
         metadata::MetadataValue,
@@ -65,7 +54,7 @@ pub enum MevStageError {
     #[error("invalid tpu socket: {0}")]
     BadTpuSocket(#[from] AddrParseError),
     #[error("stream disconnected")]
-    PacketStreamDisconnected,
+    GrpcStreamDisconnected,
     #[error("bad packet message")]
     BadMessage,
     #[error("error sending message to another part of the system")]
@@ -161,43 +150,75 @@ impl MevStage {
             .await?
             .into_inner();
         loop {
-            let response = subscription
-                .message()
-                .await?
-                .ok_or(MevStageError::PacketStreamDisconnected)?;
+            tokio::select! {
+                biased;
 
-            match response.msg.ok_or(MevStageError::BadMessage)? {
-                Msg::BatchList(batch_wrapper) => {
-                    let packet_batches = batch_wrapper
-                        .batch_list
-                        .into_iter()
-                        .map(|batch| {
-                            PacketBatch::new(
-                                batch
-                                    .packets
-                                    .into_iter()
-                                    .map(proto_packet_to_packet)
-                                    .collect(),
-                            )
-                        })
-                        .collect();
-                    verified_packet_sender
-                        .send(packet_batches)
-                        .map_err(|_| MevStageError::ChannelError)?;
+                // TODO (LB): add interval
+
+                response = subscription.message() => {
+                    let msg = response?.ok_or(MevStageError::GrpcStreamDisconnected)?.msg.ok_or(MevStageError::BadMessage)?;
+                    match msg {
+                        Msg::BatchList(batch_wrapper) => {
+                            let packet_batches = batch_wrapper
+                                .batch_list
+                                .into_iter()
+                                .map(|batch| {
+                                    PacketBatch::new(
+                                        batch
+                                            .packets
+                                            .into_iter()
+                                            .map(proto_packet_to_packet)
+                                            .collect(),
+                                    )
+                                })
+                                .collect();
+                            verified_packet_sender
+                                .send(packet_batches)
+                                .map_err(|_| MevStageError::ChannelError)?;
+                        }
+                        Msg::Heartbeat(true) => heartbeat_sender
+                            .send(Some((tpu.clone(), tpu_fwd.clone())))
+                            .map_err(|_| MevStageError::ChannelError)?,
+                        Msg::Heartbeat(false) => heartbeat_sender
+                            .send(None)
+                            .map_err(|_| MevStageError::ChannelError)?,
+                    }
                 }
-                Msg::Heartbeat(true) => heartbeat_sender
-                    .send(Some((tpu.clone(), tpu_fwd.clone())))
-                    .map_err(|_| MevStageError::ChannelError)?,
-                Msg::Heartbeat(false) => heartbeat_sender
-                    .send(None)
-                    .map_err(|_| MevStageError::ChannelError)?,
             }
         }
     }
 
-    async fn bundle_streamer(client: ValidatorInterfaceClientType) -> Result<()> {
-        loop {}
-        Ok(())
+    async fn bundle_streamer(
+        mut client: ValidatorInterfaceClientType,
+        bundle_sender: Sender<Vec<Bundle>>,
+    ) -> Result<()> {
+        // TODO (LB): need to disconnect if heart beat missed
+        let mut subscription = client
+            .subscribe_bundles(SubscribeBundlesRequest {})
+            .await?
+            .into_inner();
+        loop {
+            tokio::select! {
+                biased;
+
+                response = subscription.message() => {
+                    let response = response?.ok_or(MevStageError::GrpcStreamDisconnected)?;
+                    let bundles = response
+                        .bundles
+                        .into_iter()
+                        .map(|b| {
+                            let batch = PacketBatch::new(
+                                b.packets.into_iter().map(proto_packet_to_packet).collect(),
+                            );
+                            Bundle { batch }
+                        })
+                        .collect();
+                    bundle_sender
+                        .send(bundles)
+                        .map_err(|_| MevStageError::ChannelError)?;
+                }
+            }
+        }
     }
 
     async fn run_event_loops(
@@ -205,6 +226,7 @@ impl MevStage {
         auth_interceptor: AuthenticationInjector,
         heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
         verified_packet_sender: Sender<Vec<PacketBatch>>,
+        bundle_sender: Sender<Vec<Bundle>>,
     ) -> Result<()> {
         let channel = Endpoint::from_shared(validator_interface_address)?
             .connect()
@@ -221,9 +243,11 @@ impl MevStage {
             tpu_fwd,
             verified_packet_sender,
         )));
-        handles.push(tokio::spawn(Self::bundle_streamer(client)));
+        handles.push(tokio::spawn(Self::bundle_streamer(client, bundle_sender)));
 
+        // TODO (LB): need to propagate these errors instead of returning Ok(()) here
         futures::future::join_all(handles).await;
+        info!("packet and bundle stream threads joined");
 
         Ok(())
     }
@@ -262,7 +286,7 @@ impl MevStage {
         validator_interface_address: Option<SocketAddr>,
         verified_packet_sender: Sender<Vec<PacketBatch>>,
         heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
-        _bundle_sender: Sender<Vec<Bundle>>,
+        bundle_sender: Sender<Vec<Bundle>>,
     ) {
         if validator_interface_address.is_none() {
             return;
@@ -278,6 +302,7 @@ impl MevStage {
                 interceptor.clone(),
                 heartbeat_sender.clone(),
                 verified_packet_sender.clone(),
+                bundle_sender.clone(),
             )
             .await
             {

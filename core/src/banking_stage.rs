@@ -874,9 +874,9 @@ impl BankingStage {
     }
 
     fn get_bundles(bundle: Bundle, bank: &Arc<Bank>) -> Vec<SanitizedTransaction> {
-        let packet_indexes = Self::generate_packet_indexes(&bundle.packets.packets);
+        let packet_indexes = Self::generate_packet_indexes(&bundle.batch.packets);
         let (transactions, _) = Self::transactions_from_packets(
-            &bundle.packets,
+            &bundle.batch,
             &packet_indexes,
             &bank.feature_set,
             bank.vote_only_bank(),
