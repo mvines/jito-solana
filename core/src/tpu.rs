@@ -164,17 +164,17 @@ impl Tpu {
         // MEV TPU proxy packet injection
         let (bundle_sender, bundle_rx) = unbounded();
 
-        let (tpu_notify_sender, tpu_notify_receiver) = unbounded();
+        let (heartbeat_sender, heartbeat_receiver) = unbounded();
         let recv_verify_stage = MevStage::new(
             cluster_info.keypair(),
             validator_interface_address,
             recv_verified_sender,
-            tpu_notify_sender,
+            heartbeat_sender,
             bundle_sender,
             HEARTBEAT_TIMEOUT_MS,
         );
         let tpu_proxy_advertiser =
-            TpuProxyAdvertiser::new(cluster_info, tpu_notify_receiver, HEARTBEAT_TIMEOUT_MS);
+            TpuProxyAdvertiser::new(cluster_info, heartbeat_receiver, HEARTBEAT_TIMEOUT_MS);
 
         let (verified_gossip_vote_packets_sender, verified_gossip_vote_packets_receiver) =
             unbounded();

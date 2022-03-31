@@ -10,6 +10,7 @@ use {
             packet::PacketBatch as PbPacketBatch,
             validator_interface::{
                 validator_interface_client::ValidatorInterfaceClient, GetTpuConfigsRequest,
+                SubscribePacketsRequest,
             },
         },
         proto_packet_to_packet,
@@ -48,8 +49,6 @@ use {
 
 pub struct MevStage {
     validator_interface_thread: JoinHandle<()>,
-    packet_converter_thread: JoinHandle<()>,
-    proxy_bridge_thread: JoinHandle<()>,
 }
 
 #[derive(Error, Debug)]
@@ -64,6 +63,8 @@ pub enum MevStageError {
     MissingTpuSocket(String),
     #[error("invalid tpu socket: {0}")]
     BadTpuSocket(#[from] AddrParseError),
+    #[error("stream disconnected")]
+    PacketStreamDisconnected,
 }
 
 type Result<T> = std::result::Result<T, MevStageError>;
@@ -109,7 +110,7 @@ impl MevStage {
         keypair: RwLockReadGuard<Arc<Keypair>>,
         validator_interface_address: Option<SocketAddr>,
         verified_packet_sender: Sender<Vec<PacketBatch>>,
-        tpu_notify_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
+        heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
         bundle_sender: Sender<Vec<Bundle>>,
         i: u64,
     ) -> Self {
@@ -117,8 +118,6 @@ impl MevStage {
         let sig: Signature = keypair.sign_message(msg.as_slice());
         let pubkey = keypair.pubkey();
         let interceptor = AuthenticationInjector::new(msg, sig, pubkey);
-
-        let (packet_converter_sender, packet_converter_receiver) = mpsc::unbounded_channel();
 
         let rt = Runtime::new().unwrap();
         let validator_interface_thread = thread::spawn(move || {
@@ -131,112 +130,57 @@ impl MevStage {
                 Self::validator_interface_connection_loop(
                     interceptor,
                     validator_interface_address,
-                    packet_converter_sender,
-                    tpu_notify_sender,
+                    verified_packet_sender,
+                    heartbeat_sender,
                     bundle_sender,
                 )
             })
-        });
-
-        let (proxy_bridge_sender, proxy_bridge_receiver) = mpsc::unbounded_channel();
-        let packet_converter_thread = thread::spawn(move || {
-            Self::convert_packets(packet_converter_receiver, proxy_bridge_sender)
-        });
-
-        let proxy_bridge_thread = thread::spawn(move || {
-            Self::proxy_bridge(proxy_bridge_receiver, verified_packet_sender)
         });
 
         info!("[MEV] Started recv verify stage");
 
         Self {
             validator_interface_thread,
-            packet_converter_thread,
-            proxy_bridge_thread,
         }
     }
 
-    // Proxy bridge continuously reads from the receiver
-    // and writes to sender (banking stage).
-    fn proxy_bridge(
-        mut proxy_bridge_receiver: UnboundedReceiver<Vec<PacketBatch>>,
-        verified_packet_sender: Sender<Vec<PacketBatch>>,
-    ) {
-        // In the loop below the None case is failure to read from
-        // the packet converter thread, whereas send error is failure to
-        // forward to banking. Both should only occur on shutdown.
-        loop {
-            let maybe_packet_batch = proxy_bridge_receiver.blocking_recv();
-            match maybe_packet_batch {
-                None => {
-                    warn!("[MEV] Exiting proxy bridge, receiver dropped");
-                    break;
-                }
-                Some(packet_batch) => {
-                    if let Err(e) = verified_packet_sender.send(packet_batch) {
-                        warn!("[MEV] Exiting proxy bridge, receiver dropped: {}", e);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    // convert_packets makes a blocking read from packet_converter_receiver
-    // before converting all packets across packet batches in a batch list
-    // into a single packet batch with all converted packets, which it sends
-    // to the proxy_bridge_sender asynchronously.
-    fn convert_packets(
-        mut packet_converter_receiver: UnboundedReceiver<Vec<PbPacketBatch>>,
-        proxy_bridge_sender: UnboundedSender<Vec<PacketBatch>>,
-    ) {
-        // In the loop below the None case is failure to read from
-        // the validator connection thread, whereas send error is failure to
-        // send to proxy bridge. Both should only occur on shutdown.
-        loop {
-            let maybe_batch_list = packet_converter_receiver.blocking_recv(); // TODO: inner try_recv
-            match maybe_batch_list {
-                None => {
-                    warn!("[MEV] Exiting convert packets, receiver dropped");
-                    break;
-                }
-                Some(batch_list) => {
-                    let mut converted_batch_list = Vec::with_capacity(batch_list.len());
-                    for batch in batch_list {
-                        converted_batch_list.push(PacketBatch {
-                            packets: PinnedVec::from_vec(
-                                batch
-                                    .packets
-                                    .into_iter()
-                                    .map(proto_packet_to_packet)
-                                    .collect(),
-                            ),
-                        });
-                    }
-                    // Async send, from unbounded docs:
-                    // A send on this channel will always succeed as long as
-                    // the receive half has not been closed. If the receiver
-                    // falls behind, messages will be arbitrarily buffered.
-                    if let Err(e) = proxy_bridge_sender.send(converted_batch_list) {
-                        warn!("[MEV] Exiting convert packets, sender dropped: {}", e);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    async fn start_packet_streamer_and_tpu_advertiser(
-        client: ValidatorInterfaceClient<InterceptedService<Channel, AuthenticationInjector>>,
-        tpu_notify_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
+    async fn packet_streamer_loop(
+        mut client: ValidatorInterfaceClient<InterceptedService<Channel, AuthenticationInjector>>,
+        heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
         tpu: SocketAddr,
         tpu_fwd: SocketAddr,
+        verified_packet_sender: Sender<Vec<PacketBatch>>,
     ) -> Result<()> {
-        loop {}
-        Ok(())
+        let mut subscription = client
+            .subscribe_packets(SubscribePacketsRequest {})
+            .await?
+            .into_inner();
+        loop {
+            let msg = subscription
+                .message()
+                .await?
+                .ok_or(MevStageError::PacketStreamDisconnected)?;
+
+            let packet_batches = msg
+                .batch_list
+                .into_iter()
+                .map(|batch| {
+                    PacketBatch::new(
+                        batch
+                            .packets
+                            .into_iter()
+                            .map(proto_packet_to_packet)
+                            .collect(),
+                    )
+                })
+                .collect();
+            if let Err(e) = verified_packet_sender.send(packet_batches) {
+                error!("error sending packet batches {}", e);
+            }
+        }
     }
 
-    async fn start_bundle_streamer(client: ValidatorInterfaceClientType) -> Result<()> {
+    async fn bundle_streamer(client: ValidatorInterfaceClientType) -> Result<()> {
         loop {}
         Ok(())
     }
@@ -244,7 +188,8 @@ impl MevStage {
     async fn run_event_loops(
         validator_interface_address: String,
         auth_interceptor: AuthenticationInjector,
-        tpu_notify_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
+        heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
+        verified_packet_sender: Sender<Vec<PacketBatch>>,
     ) -> Result<()> {
         let channel = Endpoint::from_shared(validator_interface_address)?
             .connect()
@@ -254,15 +199,14 @@ impl MevStage {
         let (tpu, tpu_fwd) = Self::fetch_tpu_config(&mut client).await?;
 
         let mut handles = vec![];
-        handles.push(tokio::spawn(
-            Self::start_packet_streamer_and_tpu_advertiser(
-                client.clone(),
-                tpu_notify_sender,
-                tpu,
-                tpu_fwd,
-            ),
-        ));
-        handles.push(tokio::spawn(Self::start_bundle_streamer(client)));
+        handles.push(tokio::spawn(Self::packet_streamer_loop(
+            client.clone(),
+            heartbeat_sender,
+            tpu,
+            tpu_fwd,
+            verified_packet_sender,
+        )));
+        handles.push(tokio::spawn(Self::bundle_streamer(client)));
 
         futures::future::join_all(handles).await;
 
@@ -301,8 +245,8 @@ impl MevStage {
     async fn validator_interface_connection_loop(
         interceptor: AuthenticationInjector,
         validator_interface_address: Option<SocketAddr>,
-        _packet_converter_sender: UnboundedSender<Vec<PbPacketBatch>>,
-        tpu_notify_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
+        verified_packet_sender: Sender<Vec<PacketBatch>>,
+        heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
         _bundle_sender: Sender<Vec<Bundle>>,
     ) {
         if validator_interface_address.is_none() {
@@ -317,7 +261,8 @@ impl MevStage {
             match Self::run_event_loops(
                 addr.clone(),
                 interceptor.clone(),
-                tpu_notify_sender.clone(),
+                heartbeat_sender.clone(),
+                verified_packet_sender.clone(),
             )
             .await
             {
@@ -333,16 +278,6 @@ impl MevStage {
     }
 
     pub fn join(self) -> thread::Result<()> {
-        let results = vec![
-            self.proxy_bridge_thread.join(),
-            self.packet_converter_thread.join(),
-            self.validator_interface_thread.join(),
-        ];
-
-        if results.iter().all(|t| t.is_ok()) {
-            Ok(())
-        } else {
-            Err(Box::new("failed to join a thread"))
-        }
+        self.validator_interface_thread.join()
     }
 }

@@ -21,7 +21,7 @@ pub struct TpuProxyAdvertiser {
 impl TpuProxyAdvertiser {
     pub fn new(
         cluster_info: &Arc<ClusterInfo>,
-        tpu_notify_receiver: Receiver<Option<(SocketAddr, SocketAddr)>>,
+        heartbeat_receiver: Receiver<Option<(SocketAddr, SocketAddr)>>,
         heartbeat_timeout: u64,
     ) -> TpuProxyAdvertiser {
         let cluster_info = cluster_info.clone();
@@ -32,7 +32,7 @@ impl TpuProxyAdvertiser {
                 &cluster_info,
                 saved_contact_info.tpu,
                 saved_contact_info.tpu_forwards,
-                tpu_notify_receiver,
+                heartbeat_receiver,
                 heartbeat_timeout,
             )
         });
@@ -43,13 +43,13 @@ impl TpuProxyAdvertiser {
         cluster_info: &Arc<ClusterInfo>,
         saved_tpu: SocketAddr,
         saved_tpu_forwards: SocketAddr,
-        mut tpu_notify_receiver: Receiver<Option<(SocketAddr, SocketAddr)>>,
+        mut heartbeat_receiver: Receiver<Option<(SocketAddr, SocketAddr)>>,
         heartbeat_timeout: u64,
     ) {
         let mut is_advertising_proxy = false;
 
         loop {
-            match tpu_notify_receiver.recv_timeout(Duration::from_millis(heartbeat_timeout)) {
+            match heartbeat_receiver.recv_timeout(Duration::from_millis(heartbeat_timeout)) {
                 Ok(Some((tpu_address, tpu_forward_address))) => {
                     if !is_advertising_proxy {
                         info!("TPU proxy connected, advertising remote TPU ports");
