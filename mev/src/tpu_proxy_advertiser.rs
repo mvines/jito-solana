@@ -43,7 +43,7 @@ impl TpuProxyAdvertiser {
         cluster_info: &Arc<ClusterInfo>,
         saved_tpu: SocketAddr,
         saved_tpu_forwards: SocketAddr,
-        mut heartbeat_receiver: Receiver<Option<(SocketAddr, SocketAddr)>>,
+        heartbeat_receiver: Receiver<Option<(SocketAddr, SocketAddr)>>,
         heartbeat_timeout: u64,
     ) {
         let mut is_advertising_proxy = false;
@@ -70,7 +70,6 @@ impl TpuProxyAdvertiser {
                     if is_advertising_proxy {
                         info!("channel disconnected, exiting");
                         Self::set_tpu_addresses(cluster_info, saved_tpu, saved_tpu_forwards);
-                        is_advertising_proxy = false;
                     }
                     return;
                 }

@@ -29,10 +29,10 @@ use {
     thiserror::Error,
     tokio::{
         runtime::Runtime,
-        time::{self, sleep, Interval},
+        time::{self, sleep},
     },
     tonic::{
-        codegen::{http::uri::InvalidUri, InterceptedService, Service},
+        codegen::{http::uri::InvalidUri, InterceptedService},
         metadata::MetadataValue,
         service::Interceptor,
         transport::{Channel, Endpoint, Error},
@@ -144,16 +144,22 @@ impl MevStage {
         }
     }
 
-    async fn packet_streamer_loop(
-        mut client: ValidatorInterfaceClient<InterceptedService<Channel, AuthenticationInjector>>,
+    async fn streamer_loop(
+        mut client: ValidatorInterfaceClientType,
         heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
         tpu: SocketAddr,
         tpu_fwd: SocketAddr,
         verified_packet_sender: Sender<Vec<PacketBatch>>,
+        bundle_sender: Sender<Vec<Bundle>>,
         heartbeat_timeout_ms: u64,
     ) -> Result<()> {
-        let mut subscription = client
+        let mut packet_subscription = client
             .subscribe_packets(SubscribePacketsRequest {})
+            .await?
+            .into_inner();
+
+        let mut bundle_subscription = client
+            .subscribe_bundles(SubscribeBundlesRequest {})
             .await?
             .into_inner();
 
@@ -175,7 +181,24 @@ impl MevStage {
                     heartbeat_sent = false;
                 }
 
-                response = subscription.message() => {
+                response = bundle_subscription.message() => {
+                    let response = response?.ok_or(MevStageError::GrpcStreamDisconnected)?;
+                    let bundles = response
+                        .bundles
+                        .into_iter()
+                        .map(|b| {
+                            let batch = PacketBatch::new(
+                                b.packets.into_iter().map(proto_packet_to_packet).collect(),
+                            );
+                            Bundle { batch }
+                        })
+                        .collect();
+                    bundle_sender
+                        .send(bundles)
+                        .map_err(|_| MevStageError::ChannelError)?;
+                }
+
+                response = packet_subscription.message() => {
                     let msg = response?.ok_or(MevStageError::GrpcStreamDisconnected)?.msg.ok_or(MevStageError::BadMessage)?;
                     match msg {
                         Msg::BatchList(batch_wrapper) => {
@@ -216,40 +239,6 @@ impl MevStage {
         }
     }
 
-    async fn bundle_streamer(
-        mut client: ValidatorInterfaceClientType,
-        bundle_sender: Sender<Vec<Bundle>>,
-    ) -> Result<()> {
-        // TODO (LB): need to disconnect if heart beat missed
-        let mut subscription = client
-            .subscribe_bundles(SubscribeBundlesRequest {})
-            .await?
-            .into_inner();
-        loop {
-            tokio::select! {
-                biased;
-                // TODO (LB): should we add heart beat here too?
-
-                response = subscription.message() => {
-                    let response = response?.ok_or(MevStageError::GrpcStreamDisconnected)?;
-                    let bundles = response
-                        .bundles
-                        .into_iter()
-                        .map(|b| {
-                            let batch = PacketBatch::new(
-                                b.packets.into_iter().map(proto_packet_to_packet).collect(),
-                            );
-                            Bundle { batch }
-                        })
-                        .collect();
-                    bundle_sender
-                        .send(bundles)
-                        .map_err(|_| MevStageError::ChannelError)?;
-                }
-            }
-        }
-    }
-
     async fn run_event_loops(
         validator_interface_address: String,
         auth_interceptor: AuthenticationInjector,
@@ -265,28 +254,20 @@ impl MevStage {
 
         let (tpu, tpu_fwd) = Self::fetch_tpu_config(&mut client).await?;
 
-        let mut handles = vec![];
-
-        // TODO (LB): need to figure out how to handle one dying and the other not
-        handles.push(tokio::spawn(Self::packet_streamer_loop(
+        Self::streamer_loop(
             client.clone(),
             heartbeat_sender,
             tpu,
             tpu_fwd,
             verified_packet_sender,
+            bundle_sender,
             heartbeat_timeout_ms,
-        )));
-        handles.push(tokio::spawn(Self::bundle_streamer(client, bundle_sender)));
-
-        // TODO (LB): need to propagate these errors instead of returning Ok(()) here
-        futures::future::join_all(handles).await;
-        info!("packet and bundle stream threads joined");
-
-        Ok(())
+        )
+        .await
     }
 
     async fn fetch_tpu_config(
-        client: &mut ValidatorInterfaceClient<InterceptedService<Channel, AuthenticationInjector>>,
+        client: &mut ValidatorInterfaceClientType,
     ) -> Result<(SocketAddr, SocketAddr)> {
         let tpu_configs = client
             .get_tpu_configs(GetTpuConfigsRequest {})

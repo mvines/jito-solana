@@ -44,15 +44,16 @@ fn bench_proto_to_packet(bencher: &mut Bencher) {
             .collect(),
     };
     bencher.iter(|| {
-        let packets: Vec<Vec<Packet>> = packet_batch_list
-            .batch_list
-            .iter()
-            .map(|b| {
-                b.packets
-                    .iter()
-                    .map(|p| proto_packet_to_packet(p.clone()))
-                    .collect()
-            })
-            .collect();
+        // let packets: Vec<Vec<Packet>> = packet_batch_list
+        //     .batch_list
+        //     .iter()
+        //     .map(|b| {
+        //         b.packets
+        //             .iter()
+        //             .map(|p| proto_packet_to_packet(p.clone()))
+        //             .collect()
+        //     })
+        //     .collect();
+        let p = proto_packet_to_packet(get_proto_packet(1));
     });
 }
