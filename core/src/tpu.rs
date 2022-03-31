@@ -17,7 +17,7 @@ use {
     crossbeam_channel::{unbounded, Receiver},
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{blockstore::Blockstore, blockstore_processor::TransactionStatusSender},
-    solana_mev::{recv_verify_stage::RecvVerifyStage, tpu_proxy_advertiser::TpuProxyAdvertiser},
+    solana_mev::{mev_stage::MevStage, tpu_proxy_advertiser::TpuProxyAdvertiser},
     solana_poh::poh_recorder::{PohRecorder, WorkingBankEntry},
     solana_rpc::{
         optimistically_confirmed_bank_tracker::BankNotificationSender,
@@ -54,8 +54,8 @@ pub struct Tpu {
     fetch_stage: FetchStage,
     sigverify_stage: SigVerifyStage,
     vote_sigverify_stage: SigVerifyStage,
-    recv_verify_stage: Option<RecvVerifyStage>,
-    tpu_proxy_advertiser: Option<TpuProxyAdvertiser>,
+    recv_verify_stage: MevStage,
+    tpu_proxy_advertiser: TpuProxyAdvertiser,
     banking_stage: BankingStage,
     cluster_info_vote_listener: ClusterInfoVoteListener,
     broadcast_stage: BroadcastStage,
@@ -161,21 +161,18 @@ impl Tpu {
         };
 
         // MEV TPU proxy packet injection
-        let mut recv_verify_stage = None;
-        let mut tpu_proxy_advertiser = None;
-        if let Some(validator_interface_address) = validator_interface_address {
-            let (tpu_notify_sender, tpu_notify_receiver) =
-                unbounded_channel::<(Option<SocketAddr>, Option<SocketAddr>)>();
-            recv_verify_stage = Some(RecvVerifyStage::new(
-                cluster_info.keypair(),
-                validator_interface_address,
-                recv_verified_sender,
-                tpu_notify_sender,
-            ));
-            tpu_proxy_advertiser = Some(TpuProxyAdvertiser::new(cluster_info, tpu_notify_receiver));
-        } else {
-            info!("[MEV] Missing TPU or validator addresses, running without TPU proxy");
-        }
+        let (bundle_sender, bundle_rx) = unbounded();
+
+        let (tpu_notify_sender, tpu_notify_receiver) =
+            unbounded_channel::<(Option<SocketAddr>, Option<SocketAddr>)>();
+        let recv_verify_stage = MevStage::new(
+            cluster_info.keypair(),
+            validator_interface_address,
+            recv_verified_sender,
+            tpu_notify_sender,
+            bundle_sender,
+        );
+        let tpu_proxy_advertiser = TpuProxyAdvertiser::new(cluster_info, tpu_notify_receiver);
 
         let (verified_gossip_vote_packets_sender, verified_gossip_vote_packets_receiver) =
             unbounded();
@@ -195,7 +192,6 @@ impl Tpu {
             cluster_confirmed_slot_sender,
         );
 
-        let (_tx, rx) = unbounded();
         let banking_stage = BankingStage::new(
             cluster_info,
             poh_recorder,
@@ -205,7 +201,7 @@ impl Tpu {
             transaction_status_sender,
             replay_vote_sender,
             cost_model.clone(),
-            rx,
+            bundle_rx,
         );
 
         let broadcast_stage = broadcast_type.new_broadcast_stage(
@@ -235,7 +231,7 @@ impl Tpu {
     }
 
     pub fn join(self) -> thread::Result<()> {
-        let mut results = vec![
+        let results = vec![
             self.fetch_stage.join(),
             self.sigverify_stage.join(),
             self.vote_sigverify_stage.join(),
@@ -243,13 +239,9 @@ impl Tpu {
             self.banking_stage.join(),
             self.find_packet_sender_stake_stage.join(),
             self.vote_find_packet_sender_stake_stage.join(),
+            self.recv_verify_stage.join(),
+            self.tpu_proxy_advertiser.join(),
         ];
-        if let (Some(recv_verify_stage), Some(tpu_proxy_advertiser)) =
-            (self.recv_verify_stage, self.tpu_proxy_advertiser)
-        {
-            results.push(recv_verify_stage.join());
-            results.push(tpu_proxy_advertiser.join());
-        }
         self.tpu_quic_t.join()?;
         let broadcast_result = self.broadcast_stage.join();
         for result in results {

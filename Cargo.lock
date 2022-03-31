@@ -5350,6 +5350,7 @@ dependencies = [
  "solana-gossip",
  "solana-perf",
  "solana-sdk",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tonic 0.5.2",
