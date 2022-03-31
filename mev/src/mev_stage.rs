@@ -109,8 +109,9 @@ impl MevStage {
         keypair: RwLockReadGuard<Arc<Keypair>>,
         validator_interface_address: Option<SocketAddr>,
         verified_packet_sender: Sender<Vec<PacketBatch>>,
-        tpu_notify_sender: UnboundedSender<(Option<SocketAddr>, Option<SocketAddr>)>,
+        tpu_notify_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
         bundle_sender: Sender<Vec<Bundle>>,
+        i: u64,
     ) -> Self {
         let msg = b"Let's get this money!".to_vec();
         let sig: Signature = keypair.sign_message(msg.as_slice());
@@ -226,8 +227,8 @@ impl MevStage {
     }
 
     async fn start_packet_streamer_and_tpu_advertiser(
-        client: &mut ValidatorInterfaceClientType,
-        tpu_notify_sender: &UnboundedSender<(Option<SocketAddr>, Option<SocketAddr>)>,
+        client: ValidatorInterfaceClient<InterceptedService<Channel, AuthenticationInjector>>,
+        tpu_notify_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
         tpu: SocketAddr,
         tpu_fwd: SocketAddr,
     ) -> Result<()> {
@@ -235,7 +236,7 @@ impl MevStage {
         Ok(())
     }
 
-    async fn start_bundle_streamer(client: &mut ValidatorInterfaceClientType) -> Result<()> {
+    async fn start_bundle_streamer(client: ValidatorInterfaceClientType) -> Result<()> {
         loop {}
         Ok(())
     }
@@ -243,7 +244,7 @@ impl MevStage {
     async fn run_event_loops(
         validator_interface_address: String,
         auth_interceptor: AuthenticationInjector,
-        tpu_notify_sender: &UnboundedSender<(Option<SocketAddr>, Option<SocketAddr>)>,
+        tpu_notify_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
     ) -> Result<()> {
         let channel = Endpoint::from_shared(validator_interface_address)?
             .connect()
@@ -255,13 +256,13 @@ impl MevStage {
         let mut handles = vec![];
         handles.push(tokio::spawn(
             Self::start_packet_streamer_and_tpu_advertiser(
-                &mut client,
+                client.clone(),
                 tpu_notify_sender,
                 tpu,
                 tpu_fwd,
             ),
         ));
-        handles.push(tokio::spawn(Self::start_bundle_streamer(&mut client)));
+        handles.push(tokio::spawn(Self::start_bundle_streamer(client)));
 
         futures::future::join_all(handles).await;
 
@@ -301,7 +302,7 @@ impl MevStage {
         interceptor: AuthenticationInjector,
         validator_interface_address: Option<SocketAddr>,
         _packet_converter_sender: UnboundedSender<Vec<PbPacketBatch>>,
-        tpu_notify_sender: UnboundedSender<(Option<SocketAddr>, Option<SocketAddr>)>,
+        tpu_notify_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
         _bundle_sender: Sender<Vec<Bundle>>,
     ) {
         if validator_interface_address.is_none() {
@@ -313,7 +314,12 @@ impl MevStage {
         loop {
             let mut backoff = BackoffStrategy::new();
 
-            match Self::run_event_loops(addr.clone(), interceptor.clone(), &tpu_notify_sender).await
+            match Self::run_event_loops(
+                addr.clone(),
+                interceptor.clone(),
+                tpu_notify_sender.clone(),
+            )
+            .await
             {
                 Ok(_) => {
                     backoff.reset();

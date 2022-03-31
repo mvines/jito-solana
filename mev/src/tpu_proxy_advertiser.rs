@@ -3,14 +3,15 @@
 //! and advertises TPU proxy addresses when connected.
 
 use {
+    crossbeam_channel::{Receiver, RecvTimeoutError},
     log::*,
     solana_gossip::cluster_info::ClusterInfo,
     std::{
         net::SocketAddr,
         sync::Arc,
         thread::{self, JoinHandle},
+        time::Duration,
     },
-    tokio::sync::mpsc::UnboundedReceiver,
 };
 
 pub struct TpuProxyAdvertiser {
@@ -20,7 +21,8 @@ pub struct TpuProxyAdvertiser {
 impl TpuProxyAdvertiser {
     pub fn new(
         cluster_info: &Arc<ClusterInfo>,
-        tpu_notify_receiver: UnboundedReceiver<(Option<SocketAddr>, Option<SocketAddr>)>,
+        tpu_notify_receiver: Receiver<Option<(SocketAddr, SocketAddr)>>,
+        heartbeat_timeout: u64,
     ) -> TpuProxyAdvertiser {
         let cluster_info = cluster_info.clone();
         let thread_hdl = thread::spawn(move || {
@@ -31,6 +33,7 @@ impl TpuProxyAdvertiser {
                 saved_contact_info.tpu,
                 saved_contact_info.tpu_forwards,
                 tpu_notify_receiver,
+                heartbeat_timeout,
             )
         });
         Self { thread_hdl }
@@ -40,31 +43,37 @@ impl TpuProxyAdvertiser {
         cluster_info: &Arc<ClusterInfo>,
         saved_tpu: SocketAddr,
         saved_tpu_forwards: SocketAddr,
-        mut tpu_notify_receiver: UnboundedReceiver<(Option<SocketAddr>, Option<SocketAddr>)>,
+        mut tpu_notify_receiver: Receiver<Option<(SocketAddr, SocketAddr)>>,
+        heartbeat_timeout: u64,
     ) {
-        let mut last_advertise = false;
+        let mut is_advertising_proxy = false;
+
         loop {
-            match tpu_notify_receiver.blocking_recv() {
-                Some((Some(tpu_address), Some(tpu_forward_address))) => {
-                    info!("[MEV] TPU proxy connect, advertising remote TPU ports");
-                    Self::set_tpu_addresses(cluster_info, tpu_address, tpu_forward_address);
-                    last_advertise = true;
-                }
-                Some((None, None)) => {
-                    if last_advertise {
-                        info!("[MEV] TPU proxy disconnected, advertising local TPU ports");
-                        Self::set_tpu_addresses(cluster_info, saved_tpu, saved_tpu_forwards);
-                        last_advertise = false;
+            match tpu_notify_receiver.recv_timeout(Duration::from_millis(heartbeat_timeout)) {
+                Ok(Some((tpu_address, tpu_forward_address))) => {
+                    if !is_advertising_proxy {
+                        info!("TPU proxy connected, advertising remote TPU ports");
+                        Self::set_tpu_addresses(cluster_info, tpu_address, tpu_forward_address);
+                        is_advertising_proxy = true;
                     }
                 }
-                None => {
-                    warn!("[MEV] Advertising local TPU ports and shutting down.");
-                    Self::set_tpu_addresses(cluster_info, saved_tpu, saved_tpu_forwards);
+                // either tpu proxy detected heartbeat dead or receiving timed out
+                // either way, we should turn back proxy
+                Ok(None) | Err(RecvTimeoutError::Timeout) => {
+                    if is_advertising_proxy {
+                        info!("TPU proxy heartbeat died, advertising my TPU ports");
+                        Self::set_tpu_addresses(cluster_info, saved_tpu, saved_tpu_forwards);
+                        is_advertising_proxy = false;
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    if is_advertising_proxy {
+                        info!("channel disconnected, exiting");
+                        Self::set_tpu_addresses(cluster_info, saved_tpu, saved_tpu_forwards);
+                        is_advertising_proxy = false;
+                    }
                     return;
                 }
-                _ => {
-                    unreachable!()
-                } // Channel only receives internal messages
             }
         }
     }

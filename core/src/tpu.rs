@@ -34,13 +34,14 @@ use {
         sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
         thread,
     },
-    tokio::sync::mpsc::unbounded_channel,
 };
 
 pub const DEFAULT_TPU_COALESCE_MS: u64 = 5;
 
 // allow multiple connections for NAT and any open/close overlap
 pub const MAX_QUIC_CONNECTIONS_PER_IP: usize = 8;
+
+const HEARTBEAT_TIMEOUT_MS: u64 = 1500;
 
 pub struct TpuSockets {
     pub transactions: Vec<UdpSocket>,
@@ -163,16 +164,17 @@ impl Tpu {
         // MEV TPU proxy packet injection
         let (bundle_sender, bundle_rx) = unbounded();
 
-        let (tpu_notify_sender, tpu_notify_receiver) =
-            unbounded_channel::<(Option<SocketAddr>, Option<SocketAddr>)>();
+        let (tpu_notify_sender, tpu_notify_receiver) = unbounded();
         let recv_verify_stage = MevStage::new(
             cluster_info.keypair(),
             validator_interface_address,
             recv_verified_sender,
             tpu_notify_sender,
             bundle_sender,
+            HEARTBEAT_TIMEOUT_MS,
         );
-        let tpu_proxy_advertiser = TpuProxyAdvertiser::new(cluster_info, tpu_notify_receiver);
+        let tpu_proxy_advertiser =
+            TpuProxyAdvertiser::new(cluster_info, tpu_notify_receiver, HEARTBEAT_TIMEOUT_MS);
 
         let (verified_gossip_vote_packets_sender, verified_gossip_vote_packets_receiver) =
             unbounded();
