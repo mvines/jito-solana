@@ -168,10 +168,11 @@ impl MevStage {
                 _ = timeout_interval.tick() => {
                     debug!("tick");
                     if !heartbeat_sent {
+                        warn!("heartbeat late, disconnecting");
                         heartbeat_sender.send(None).map_err(|_| MevStageError::ChannelError)?;
+                        return Err(MevStageError::HeartbeatError);
                     }
                     heartbeat_sent = false;
-                    return Err(MevStageError::HeartbeatError);
                 }
 
                 response = subscription.message() => {
