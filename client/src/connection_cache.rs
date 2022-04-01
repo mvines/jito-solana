@@ -3,6 +3,7 @@ use {
         quic_client::QuicTpuConnection, tpu_connection::TpuConnection, udp_client::UdpTpuConnection,
     },
     lazy_static::lazy_static,
+    log::info,
     std::{
         collections::{hash_map::Entry, BTreeMap, HashMap},
         net::{SocketAddr, UdpSocket},
@@ -88,11 +89,13 @@ pub fn get_connection(addr: &SocketAddr) -> Arc<dyn TpuConnection + 'static + Sy
             let (old_ticks, target_addr) = map.last_used_times.iter().next().unwrap();
             (*old_ticks, *target_addr)
         };
+        info!("dropping {} {}", target_addr, old_ticks);
         map.map.remove(&target_addr);
         map.last_used_times.remove(&old_ticks);
     }
 
     if target_ticks != ticks {
+        info!("dropping ticks {}", target_ticks);
         map.last_used_times.remove(&target_ticks);
     }
     map.last_used_times.insert(ticks, *addr);

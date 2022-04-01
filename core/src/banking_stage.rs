@@ -1438,17 +1438,22 @@ impl BankingStage {
                 // If packets are buffered, let's wait for less time on recv from the channel.
                 // This helps detect the next leader faster, and processing the buffered
                 // packets quickly
-                info!(
-                    "short weight id: {}, buffered_packet_batches:{:?}",
-                    id, buffered_packet_batches
-                );
+                if id == 0 || id == 1 {
+                    info!(
+                        "short weight id: {}, buffered_packet_batches:{:?}",
+                        id, buffered_packet_batches
+                    );
+                }
                 Duration::from_millis(10)
             } else {
                 // Default wait time
-                info!(
-                    "long weightid: {}, buffered_packet_batches:{:?}",
-                    id, buffered_packet_batches
-                );
+                if id == 0 || id == 1 {
+                    info!(
+                        "long weight id: {}, buffered_packet_batches:{:?}",
+                        id, buffered_packet_batches
+                    );
+                }
+
                 Duration::from_millis(100)
             };
 

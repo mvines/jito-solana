@@ -93,7 +93,8 @@ impl VotingService {
         );
 
         let mut measure = Measure::start("vote_tx_send-ms");
-        let target_address = target_address.unwrap_or_else(|| cluster_info.my_contact_info().tpu);
+        let target_address =
+            target_address.unwrap_or_else(|| cluster_info.my_contact_info().tpu_vote);
         let _ = get_connection(&target_address).send_transaction(vote_op.tx());
         measure.stop();
         inc_new_counter_info!("vote_tx_send-ms", measure.as_ms() as usize);

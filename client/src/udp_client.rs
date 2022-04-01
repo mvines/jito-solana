@@ -3,6 +3,7 @@
 
 use {
     crate::tpu_connection::TpuConnection,
+    log::info,
     solana_sdk::{transaction::Transaction, transport::Result as TransportResult},
     std::net::{SocketAddr, UdpSocket},
 };
@@ -25,6 +26,7 @@ impl TpuConnection for UdpTpuConnection {
     }
 
     fn send_wire_transaction(&self, data: &[u8]) -> TransportResult<()> {
+        info!("sending wire tx");
         self.socket.send_to(data, self.addr)?;
         Ok(())
     }
