@@ -87,6 +87,10 @@ impl VotingService {
         } else {
             crate::banking_stage::next_leader_tpu(cluster_info, poh_recorder)
         };
+        info!(
+            "sending vote to next leader tpu port = {:?}",
+            target_address
+        );
 
         let mut measure = Measure::start("vote_tx_send-ms");
         let target_address = target_address.unwrap_or_else(|| cluster_info.my_contact_info().tpu);

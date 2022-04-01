@@ -29,7 +29,7 @@ use {
     thiserror::Error,
     tokio::{
         runtime::Runtime,
-        time::{self, sleep},
+        time::{self, sleep, Instant},
     },
     tonic::{
         codegen::{http::uri::InvalidUri, InterceptedService},
@@ -157,14 +157,17 @@ impl MevStage {
             .subscribe_packets(SubscribePacketsRequest {})
             .await?
             .into_inner();
+        info!("subscribed to packets");
 
         let mut bundle_subscription = client
             .subscribe_bundles(SubscribeBundlesRequest {})
             .await?
             .into_inner();
+        info!("subscribed to bundles");
 
         let mut heartbeat_sent = false;
-        let mut timeout_interval = time::interval(Duration::from_millis(heartbeat_timeout_ms));
+        let heartbeat_dur = Duration::from_millis(heartbeat_timeout_ms);
+        let mut timeout_interval = time::interval_at(Instant::now() + heartbeat_dur, heartbeat_dur);
 
         loop {
             tokio::select! {
@@ -172,7 +175,7 @@ impl MevStage {
                 biased;
 
                 _ = timeout_interval.tick() => {
-                    debug!("tick");
+                    info!("tick, checking heartbeat");
                     if !heartbeat_sent {
                         warn!("heartbeat late, disconnecting");
                         heartbeat_sender.send(None).map_err(|_| MevStageError::ChannelError)?;
@@ -182,6 +185,7 @@ impl MevStage {
                 }
 
                 response = bundle_subscription.message() => {
+                    info!("bundle");
                     let response = response?.ok_or(MevStageError::GrpcStreamDisconnected)?;
                     let bundles = response
                         .bundles
@@ -202,6 +206,7 @@ impl MevStage {
                     let msg = response?.ok_or(MevStageError::GrpcStreamDisconnected)?.msg.ok_or(MevStageError::BadMessage)?;
                     match msg {
                         Msg::BatchList(batch_wrapper) => {
+                            info!("batches");
                             let packet_batches = batch_wrapper
                                 .batch_list
                                 .into_iter()
@@ -220,14 +225,14 @@ impl MevStage {
                                 .map_err(|_| MevStageError::ChannelError)?;
                         }
                         Msg::Heartbeat(true) => {
-                            debug!("heartbeat");
+                            info!("heartbeat");
                             heartbeat_sender
                             .send(Some((tpu.clone(), tpu_fwd.clone())))
                             .map_err(|_| MevStageError::ChannelError)?;
                             heartbeat_sent = true;
                         },
                         Msg::Heartbeat(false) => {
-                            debug!("heartbeat false");
+                            info!("heartbeat false");
                             heartbeat_sender
                             .send(None)
                             .map_err(|_| MevStageError::ChannelError)?;
@@ -247,12 +252,15 @@ impl MevStage {
         bundle_sender: Sender<Vec<Bundle>>,
         heartbeat_timeout_ms: u64,
     ) -> Result<()> {
+        info!("connecting");
         let channel = Endpoint::from_shared(validator_interface_address)?
             .connect()
             .await?;
+        info!("connected");
         let mut client = ValidatorInterfaceClient::with_interceptor(channel, auth_interceptor);
 
         let (tpu, tpu_fwd) = Self::fetch_tpu_config(&mut client).await?;
+        info!("fetch tpu config");
 
         Self::streamer_loop(
             client.clone(),

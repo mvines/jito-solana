@@ -625,7 +625,6 @@ impl PohRecorder {
             Measure::this(|_| self.report_metrics(bank_slot), (), "report_metrics");
         self.report_metrics_us += report_metrics_time.as_us();
 
-        // TODO (LB): get rid of clone
         let mixins: Vec<Hash> = mixins_txs.iter().map(|(m, _)| m.clone()).collect();
         let transactions: Vec<Vec<VersionedTransaction>> =
             mixins_txs.iter().map(|(_, tx)| tx.clone()).collect();
@@ -635,8 +634,6 @@ impl PohRecorder {
                 Measure::this(|_| self.flush_cache(false), (), "flush_cache");
             self.flush_cache_no_tick_us += flush_cache_time.as_us();
             flush_cache_res?;
-
-            info!("loopity doopity");
 
             let working_bank = self
                 .working_bank
@@ -682,6 +679,8 @@ impl PohRecorder {
                 );
                 self.send_entry_us += send_entry_time.as_us();
                 return Ok(send_entry_res?);
+            } else {
+                info!("waiting for entries from poh");
             }
 
             // record() might fail if the next PoH hash needs to be a tick.  But that's ok, tick()
