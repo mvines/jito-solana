@@ -157,94 +157,94 @@ impl MevStage {
         bundle_sender: Sender<Vec<Bundle>>,
         heartbeat_timeout_ms: u64,
     ) -> Result<()> {
-        // let mut packet_subscription = client
-        //     .subscribe_packets(SubscribePacketsRequest {})
-        //     .await?
-        //     .into_inner();
-        // info!("subscribed to packets");
+        let mut packet_subscription = client
+            .subscribe_packets(SubscribePacketsRequest {})
+            .await?
+            .into_inner();
+        info!("subscribed to packets");
 
-        // let mut bundle_subscription = client
-        //     .subscribe_bundles(SubscribeBundlesRequest {})
-        //     .await?
-        //     .into_inner();
-        // info!("subscribed to bundles");
+        let mut bundle_subscription = client
+            .subscribe_bundles(SubscribeBundlesRequest {})
+            .await?
+            .into_inner();
+        info!("subscribed to bundles");
 
-        // let mut heartbeat_sent = false;
-        // let heartbeat_dur = Duration::from_millis(heartbeat_timeout_ms);
-        // let mut timeout_interval = time::interval_at(Instant::now() + heartbeat_dur, heartbeat_dur);
+        let mut heartbeat_sent = false;
+        let heartbeat_dur = Duration::from_millis(heartbeat_timeout_ms);
+        let mut timeout_interval = time::interval_at(Instant::now() + heartbeat_dur, heartbeat_dur);
 
         loop {
-            // tokio::select! {
-            // biased causes the first branch to be evaluated first as opposed to random
-            // biased;
+            tokio::select! {
+                // biased causes the first branch to be evaluated first as opposed to random
+                biased;
 
-            // _ = timeout_interval.tick() => {
-            //     info!("tick, checking heartbeat");
-            //     if !heartbeat_sent {
-            //         warn!("heartbeat late, disconnecting");
-            //         heartbeat_sender.send(None).map_err(|_| MevStageError::ChannelError)?;
-            //         return Err(MevStageError::HeartbeatError);
-            //     }
-            //     heartbeat_sent = false;
-            // }
+                _ = timeout_interval.tick() => {
+                    info!("tick, checking heartbeat");
+                    if !heartbeat_sent {
+                        warn!("heartbeat late, disconnecting");
+                        heartbeat_sender.send(None).map_err(|_| MevStageError::ChannelError)?;
+                        return Err(MevStageError::HeartbeatError);
+                    }
+                    heartbeat_sent = false;
+                }
 
-            // response = bundle_subscription.message() => {
-            //     info!("bundle");
-            //     let response = response?.ok_or(MevStageError::GrpcStreamDisconnected)?;
-            //     let bundles = response
-            //         .bundles
-            //         .into_iter()
-            //         .map(|b| {
-            //             let batch = PacketBatch::new(
-            //                 b.packets.into_iter().map(proto_packet_to_packet).collect(),
-            //             );
-            //             Bundle { batch }
-            //         })
-            //         .collect();
-            //     bundle_sender
-            //         .send(bundles)
-            //         .map_err(|_| MevStageError::ChannelError)?;
-            // }
+                response = bundle_subscription.message() => {
+                    info!("bundle");
+                    let response = response?.ok_or(MevStageError::GrpcStreamDisconnected)?;
+                    let bundles = response
+                        .bundles
+                        .into_iter()
+                        .map(|b| {
+                            let batch = PacketBatch::new(
+                                b.packets.into_iter().map(proto_packet_to_packet).collect(),
+                            );
+                            Bundle { batch }
+                        })
+                        .collect();
+                    bundle_sender
+                        .send(bundles)
+                        .map_err(|_| MevStageError::ChannelError)?;
+                }
 
-            // response = packet_subscription.message() => {
-            //     let msg = response?.ok_or(MevStageError::GrpcStreamDisconnected)?.msg.ok_or(MevStageError::BadMessage)?;
-            //     match msg {
-            //         Msg::BatchList(batch_wrapper) => {
-            //             info!("batches");
-            //             let packet_batches = batch_wrapper
-            //                 .batch_list
-            //                 .into_iter()
-            //                 .map(|batch| {
-            //                     PacketBatch::new(
-            //                         batch
-            //                             .packets
-            //                             .into_iter()
-            //                             .map(proto_packet_to_packet)
-            //                             .collect(),
-            //                     )
-            //                 })
-            //                 .collect();
-            //             verified_packet_sender
-            //                 .send(packet_batches)
-            //                 .map_err(|_| MevStageError::ChannelError)?;
-            //         }
-            //         Msg::Heartbeat(true) => {
-            //             info!("heartbeat");
-            //             heartbeat_sender
-            //             .send(Some((tpu.clone(), tpu_fwd.clone())))
-            //             .map_err(|_| MevStageError::ChannelError)?;
-            //             heartbeat_sent = true;
-            //         },
-            //         Msg::Heartbeat(false) => {
-            //             info!("heartbeat false");
-            //             heartbeat_sender
-            //             .send(None)
-            //             .map_err(|_| MevStageError::ChannelError)?;
-            //             return Err(MevStageError::HeartbeatError);
-            //         },
-            //     }
-            // }
-            // }
+                response = packet_subscription.message() => {
+                    let msg = response?.ok_or(MevStageError::GrpcStreamDisconnected)?.msg.ok_or(MevStageError::BadMessage)?;
+                    match msg {
+                        Msg::BatchList(batch_wrapper) => {
+                            info!("batches");
+                            let packet_batches = batch_wrapper
+                                .batch_list
+                                .into_iter()
+                                .map(|batch| {
+                                    PacketBatch::new(
+                                        batch
+                                            .packets
+                                            .into_iter()
+                                            .map(proto_packet_to_packet)
+                                            .collect(),
+                                    )
+                                })
+                                .collect();
+                            verified_packet_sender
+                                .send(packet_batches)
+                                .map_err(|_| MevStageError::ChannelError)?;
+                        }
+                        Msg::Heartbeat(true) => {
+                            info!("heartbeat");
+                            heartbeat_sender
+                            .send(Some((tpu.clone(), tpu_fwd.clone())))
+                            .map_err(|_| MevStageError::ChannelError)?;
+                            heartbeat_sent = true;
+                        },
+                        Msg::Heartbeat(false) => {
+                            info!("heartbeat false");
+                            heartbeat_sender
+                            .send(None)
+                            .map_err(|_| MevStageError::ChannelError)?;
+                            return Err(MevStageError::HeartbeatError);
+                        },
+                    }
+                }
+            }
         }
     }
 

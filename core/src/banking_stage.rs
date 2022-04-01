@@ -1438,22 +1438,9 @@ impl BankingStage {
                 // If packets are buffered, let's wait for less time on recv from the channel.
                 // This helps detect the next leader faster, and processing the buffered
                 // packets quickly
-                if id == 0 || id == 1 {
-                    info!(
-                        "short weight id: {}, buffered_packet_batches:{:?}",
-                        id, buffered_packet_batches
-                    );
-                }
                 Duration::from_millis(10)
             } else {
                 // Default wait time
-                if id == 0 || id == 1 {
-                    info!(
-                        "long weight id: {}, buffered_packet_batches:{:?}",
-                        id, buffered_packet_batches
-                    );
-                }
-
                 Duration::from_millis(100)
             };
 
@@ -1473,9 +1460,6 @@ impl BankingStage {
                 (),
                 "receive_and_buffer_packets",
             );
-            if id == 0 || id == 1 {
-                info!("loop vote {}!!!!!!!!", id);
-            }
             slot_metrics_tracker
                 .increment_receive_and_buffer_packets_us(receive_and_buffer_packets_time.as_us());
 
@@ -2414,9 +2398,6 @@ impl BankingStage {
     ) -> Result<(), RecvTimeoutError> {
         let mut recv_time = Measure::start("receive_and_buffer_packets_recv");
         let packet_batches = verified_receiver.recv_timeout(recv_timeout)?;
-        if id == 0 || id == 1 {
-            info!("received vote {} !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", id);
-        }
         recv_time.stop();
 
         let packet_batches_len = packet_batches.len();
