@@ -4051,6 +4051,7 @@ impl Bank {
             cached_accounts,
         );
         load_time.stop();
+        // debug!("loaded txs: {:?}", loaded_transactions);
 
         let mut execution_time = Measure::start("execution_time");
         let mut signature_count: u64 = 0;

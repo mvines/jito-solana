@@ -36,8 +36,8 @@ use {
         accounts::TransactionLoadResult,
         accounts_db::ErrorCounters,
         bank::{
-            Bank, LoadAndExecuteTransactionsOutput, TransactionBalancesSet, TransactionCheckResult,
-            TransactionExecutionResult,
+            Bank, LoadAndExecuteTransactionsOutput, TransactionBalances, TransactionBalancesSet,
+            TransactionCheckResult, TransactionExecutionResult,
         },
         bank_utils,
         cost_model::{CostModel, TransactionCost},
@@ -61,7 +61,7 @@ use {
     },
     solana_streamer::sendmmsg::{batch_send, SendPktsError},
     solana_transaction_status::token_balances::{
-        collect_token_balances, TransactionTokenBalancesSet,
+        collect_token_balances, TransactionTokenBalances, TransactionTokenBalancesSet,
     },
     std::{
         cmp,
@@ -376,6 +376,13 @@ pub struct BatchedTransactionErrorDetails {
     pub batched_dropped_txs_per_account_data_total_limit_count: u64,
 }
 
+struct AllExecutionResults {
+    pub load_and_execute_tx_output: LoadAndExecuteTransactionsOutput,
+    pub sanitized_txs: Vec<SanitizedTransaction>,
+    pub pre_balances: (TransactionBalances, TransactionTokenBalances),
+    pub post_balances: (TransactionBalances, TransactionTokenBalances),
+}
+
 #[derive(Debug, Default)]
 struct EndOfSlot {
     next_slot_leader: Option<Pubkey>,
@@ -668,6 +675,30 @@ impl BankingStage {
             // *********************************************************************************
 
             // TODO: add pre and post-balance checks that use the cached_accounts instead of the bank
+            let mut mint_decimals: HashMap<Pubkey, u8> = HashMap::new();
+            let ((pre_balances, pre_token_balances), collect_balances_time) = Measure::this(
+                |_| {
+                    // Use a shorter maximum age when adding transactions into the pipeline.  This will reduce
+                    // the likelihood of any single thread getting starved and processing old ids.
+                    // TODO: Banking stage threads should be prioritized to complete faster then this queue
+                    // expires.
+                    let pre_balances = if transaction_status_sender.is_some() {
+                        bank.collect_balances(&batch)
+                    } else {
+                        vec![]
+                    };
+
+                    let pre_token_balances = if transaction_status_sender.is_some() {
+                        collect_token_balances(bank, &batch, &mut mint_decimals)
+                    } else {
+                        vec![]
+                    };
+
+                    (pre_balances, pre_token_balances)
+                },
+                (),
+                "collect_balances",
+            );
 
             let (mut load_and_execute_transactions_output, load_execute_time) = Measure::this(
                 |_| {
@@ -709,11 +740,15 @@ impl BankingStage {
 
             // TODO (LB): collect post-balances from cached accounts
             // TODO (LB): probably want to cache to status_cache
+            let post_balances = bank.collect_balances(&batch);
+            let post_token_balances = collect_token_balances(bank, &batch, &mut mint_decimals);
 
-            execution_results.push((
-                load_and_execute_transactions_output,
-                batch.sanitized_transactions().to_vec(),
-            ));
+            execution_results.push(AllExecutionResults {
+                load_and_execute_tx_output: load_and_execute_transactions_output,
+                sanitized_txs: batch.sanitized_transactions().to_vec(),
+                pre_balances: (pre_balances, pre_token_balances),
+                post_balances: (post_balances, post_token_balances),
+            });
             drop(batch);
         }
 
@@ -737,7 +772,10 @@ impl BankingStage {
 
         info!("committing");
 
-        for (mut output, sanitized_txs) in execution_results {
+        for r in execution_results {
+            let mut output = r.load_and_execute_tx_output;
+            let sanitized_txs = r.sanitized_txs;
+
             let commit_result = bank.commit_transactions(
                 &sanitized_txs,
                 &mut output.loaded_transactions,
@@ -765,8 +803,8 @@ impl BankingStage {
                             bank.clone(),
                             sanitized_txs,
                             output.execution_results,
-                            TransactionBalancesSet::new(vec![], vec![]),
-                            TransactionTokenBalancesSet::new(vec![], vec![]),
+                            TransactionBalancesSet::new(r.pre_balances.0, r.post_balances.0),
+                            TransactionTokenBalancesSet::new(r.pre_balances.1, r.post_balances.1),
                             commit_result.rent_debits,
                         );
                     }
@@ -1568,15 +1606,16 @@ impl BankingStage {
 
     fn prepare_poh_record_bundle(
         bank_slot: &Slot,
-        execution_results_txs: &Vec<(LoadAndExecuteTransactionsOutput, Vec<SanitizedTransaction>)>,
+        execution_results_txs: &Vec<AllExecutionResults>,
     ) -> Record {
         let mixins_txs = execution_results_txs
             .iter()
-            .map(|(output, txs)| {
-                let processed_transactions: Vec<VersionedTransaction> = output
+            .map(|r| {
+                let processed_transactions: Vec<VersionedTransaction> = r
+                    .load_and_execute_tx_output
                     .execution_results
                     .iter()
-                    .zip(txs)
+                    .zip(r.sanitized_txs.iter())
                     .filter_map(|(execution_result, tx)| {
                         if execution_result.was_executed() {
                             Some(tx.to_versioned_transaction())
