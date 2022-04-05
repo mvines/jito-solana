@@ -614,7 +614,7 @@ impl BankingStage {
         bank_creation_time: &Arc<Instant>,
         recorder: &TransactionRecorder,
         transaction_status_sender: &Option<TransactionStatusSender>,
-        _gossip_vote_sender: &ReplayVoteSender,
+        gossip_vote_sender: &ReplayVoteSender,
         qos_service: &QosService,
         _banking_stage_stats: &BankingStageStats,
         _slot_metrics_tracker: &LeaderSlotMetricsTracker,
@@ -684,6 +684,10 @@ impl BankingStage {
                 "load_execute",
             );
             execute_and_commit_timings.load_execute_us = load_execute_time.as_us();
+            info!(
+                "load_and_execute_transactions_output.execution_results: {:?}",
+                load_and_execute_transactions_output.execution_results
+            );
 
             Self::check_all_executed_ok(
                 &load_and_execute_transactions_output
@@ -727,14 +731,17 @@ impl BankingStage {
         let (freeze_lock, _freeze_lock_time) =
             Measure::this(|_| bank.freeze_lock(), (), "freeze_lock");
 
+        info!("recording to poh");
         let record = Self::prepare_poh_record_bundle(&bank.slot(), &execution_results);
-        recorder.record(record)?;
+        let res = recorder.record(record)?;
+
+        info!("committing");
 
         for (mut output, sanitized_txs) in execution_results {
-            let _result = bank.commit_transactions(
+            let commit_result = bank.commit_transactions(
                 &sanitized_txs,
                 &mut output.loaded_transactions,
-                output.execution_results,
+                output.execution_results.clone(),
                 output.executed_transactions_count as u64,
                 output
                     .executed_transactions_count
@@ -742,6 +749,30 @@ impl BankingStage {
                     as u64,
                 output.signature_count,
                 &mut execute_and_commit_timings.execute_timings,
+            );
+
+            // NOTE: these balances are out of date
+            let (_, find_and_send_votes_time) = Measure::this(
+                |_| {
+                    // NOTE: don't need votes
+                    bank_utils::find_and_send_votes(
+                        &sanitized_txs,
+                        &commit_result,
+                        Some(gossip_vote_sender),
+                    );
+                    if let Some(transaction_status_sender) = transaction_status_sender {
+                        transaction_status_sender.send_transaction_status_batch(
+                            bank.clone(),
+                            sanitized_txs,
+                            output.execution_results,
+                            TransactionBalancesSet::new(vec![], vec![]),
+                            TransactionTokenBalancesSet::new(vec![], vec![]),
+                            commit_result.rent_debits,
+                        );
+                    }
+                },
+                (),
+                "find_and_send_votes",
             );
         }
 
@@ -839,7 +870,7 @@ impl BankingStage {
             // Process + send one bundle at a time
             // TODO (LB): probably want to lock all the other tx procesing pipelines (except votes) until this is done
             for bundle in bundles {
-                let bundle_txs = Self::get_bundles(bundle.clone(), working_bank);
+                let bundle_txs = Self::get_bundle_txs(bundle.clone(), working_bank);
                 info!("bundle [bundle={:?}, txs={:?}]", bundle, bundle_txs);
                 match Self::execute_bundle(
                     bundle_txs,
@@ -852,7 +883,9 @@ impl BankingStage {
                     &banking_stage_stats,
                     &slot_metrics_tracker,
                 ) {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        info!("bundle processed ok");
+                    }
                     Err(BundleExecutionError::BankNotProcessingTransactions) => {
                         error!("bank not processing txs");
                     }
@@ -878,7 +911,7 @@ impl BankingStage {
         }
     }
 
-    fn get_bundles(bundle: Bundle, bank: &Arc<Bank>) -> Vec<SanitizedTransaction> {
+    fn get_bundle_txs(bundle: Bundle, bank: &Arc<Bank>) -> Vec<SanitizedTransaction> {
         let packet_indexes = Self::generate_packet_indexes(&bundle.batch.packets);
         let (transactions, _) = Self::transactions_from_packets(
             &bundle.batch,
