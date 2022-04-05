@@ -82,6 +82,7 @@ impl BankStart {
     }
 }
 
+#[derive(Debug)]
 pub struct Record {
     pub mixins_txs: Vec<(Hash, Vec<VersionedTransaction>)>,
     pub slot: Slot,

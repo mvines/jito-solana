@@ -715,10 +715,10 @@ impl BankingStage {
                 "load_execute",
             );
             execute_and_commit_timings.load_execute_us = load_execute_time.as_us();
-            info!(
-                "load_and_execute_transactions_output.execution_results: {:?}",
-                load_and_execute_transactions_output.execution_results
-            );
+            // info!(
+            //     "load_and_execute_transactions_output.execution_results: {:?}",
+            //     load_and_execute_transactions_output.execution_results
+            // );
 
             Self::check_all_executed_ok(
                 &load_and_execute_transactions_output
@@ -766,11 +766,11 @@ impl BankingStage {
         let (freeze_lock, _freeze_lock_time) =
             Measure::this(|_| bank.freeze_lock(), (), "freeze_lock");
 
-        info!("recording to poh");
         let record = Self::prepare_poh_record_bundle(&bank.slot(), &execution_results);
+        // info!("recording to poh {:?}", record);
         let res = recorder.record(record)?;
 
-        info!("committing");
+        // info!("committing");
 
         for r in execution_results {
             let mut output = r.load_and_execute_tx_output;
