@@ -39,7 +39,10 @@ const RECEIVE_ENTRY_COUNT_THRESHOLD: usize = 8;
 pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result<ReceiveResults> {
     let timer = Duration::new(1, 0);
     let recv_start = Instant::now();
-    let (mut bank, entries_ticks) = receiver.recv_timeout(timer)?;
+    let WorkingBankEntry {
+        mut bank,
+        entries_ticks,
+    } = receiver.recv_timeout(timer)?;
 
     let mut max_tick_height = bank.max_tick_height();
     let mut slot = bank.slot();
@@ -52,7 +55,11 @@ pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result
 
     // drain channel if not at max tick height for this slot yet
     if !ticks.iter().any(|t| *t == max_tick_height) {
-        while let Ok((try_bank, entries_ticks)) = receiver.try_recv() {
+        while let Ok(WorkingBankEntry {
+            bank: try_bank,
+            entries_ticks,
+        }) = receiver.try_recv()
+        {
             if try_bank.slot() != slot {
                 warn!("Broadcast for slot: {} interrupted", bank.slot());
                 entries.clear();

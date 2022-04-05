@@ -54,6 +54,7 @@ use {
         message::Message,
         pubkey::Pubkey,
         saturating_add_assign,
+        signature::Signature,
         timing::{duration_as_ms, timestamp, AtomicInterval},
         transaction::{
             self, AddressLoader, SanitizedTransaction, TransactionError, VersionedTransaction,
@@ -700,6 +701,14 @@ impl BankingStage {
                 "collect_balances",
             );
 
+            let sigs: Vec<(Signature, transaction::Result<()>)> = batch
+                .sanitized_transactions()
+                .iter()
+                .zip(batch.lock_results().iter())
+                .map(|(tx, lr)| (tx.signatures()[0].clone(), lr.clone()))
+                .collect();
+            info!("processing txs: {:?}", sigs);
+
             let (mut load_and_execute_transactions_output, load_execute_time) = Measure::this(
                 |_| {
                     bank.load_and_execute_transactions(
@@ -708,7 +717,7 @@ impl BankingStage {
                         transaction_status_sender.is_some(),
                         transaction_status_sender.is_some(),
                         &mut execute_and_commit_timings.execute_timings,
-                        None,
+                        Some(&cached_accounts),
                     )
                 },
                 (),
@@ -768,7 +777,7 @@ impl BankingStage {
 
         let record = Self::prepare_poh_record_bundle(&bank.slot(), &execution_results);
         // info!("recording to poh {:?}", record);
-        let res = recorder.record(record)?;
+        let _ = recorder.record(record)?;
 
         // info!("committing");
 
@@ -827,6 +836,7 @@ impl BankingStage {
         cached_accounts: &mut HashMap<Pubkey, AccountSharedData>,
     ) {
         let accounts = bank.collect_accounts_to_store(txs, res, loaded);
+        info!("caching accounts {:?}", accounts);
         for (pubkey, data) in accounts {
             cached_accounts.insert(*pubkey, data.clone());
         }
