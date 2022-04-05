@@ -1057,7 +1057,11 @@ mod tests {
             assert_eq!(poh_recorder.tick_height, tick_height_before + 1);
             assert_eq!(poh_recorder.tick_cache.len(), 0);
             let mut num_entries = 0;
-            while let Ok((wbank, _entries_ticks)) = entry_receiver.try_recv() {
+            while let Ok(WorkingBankEntry {
+                bank: wbank,
+                entries_ticks: _,
+            }) = entry_receiver.try_recv()
+            {
                 assert_eq!(wbank.slot(), bank1.slot());
                 num_entries += 1; //entries_ticks
             }
@@ -1248,13 +1252,19 @@ mod tests {
 
             //tick in the cache + entry
             for _ in 0..min_tick_height {
-                let (_bank, entries_ticks) = entry_receiver.recv().unwrap();
+                let WorkingBankEntry {
+                    bank: _,
+                    entries_ticks,
+                } = entry_receiver.recv().unwrap();
                 assert_eq!(entries_ticks.len(), 1);
                 let e = entries_ticks.get(0).unwrap().0.clone();
                 assert!(e.is_tick());
             }
 
-            let (_bank, entries_ticks) = entry_receiver.recv().unwrap();
+            let WorkingBankEntry {
+                bank: _,
+                entries_ticks,
+            } = entry_receiver.recv().unwrap();
             assert_eq!(entries_ticks.len(), 1);
             let e = entries_ticks.get(0).unwrap().0.clone();
             assert!(!e.is_tick());
@@ -1296,7 +1306,10 @@ mod tests {
                 .is_err());
 
             for _ in 0..num_ticks_to_max {
-                let (_bank, entries_ticks) = entry_receiver.recv().unwrap();
+                let WorkingBankEntry {
+                    bank: _,
+                    entries_ticks,
+                } = entry_receiver.recv().unwrap();
                 assert_eq!(entries_ticks.len(), 1);
                 let entry = entries_ticks.get(0).unwrap().0.clone();
                 assert!(entry.is_tick());

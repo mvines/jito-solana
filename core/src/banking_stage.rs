@@ -2817,7 +2817,12 @@ mod tests {
             trace!("getting entries");
             let entries: Vec<_> = entry_receiver
                 .iter()
-                .map(|(_bank, entries_ticks)| entries_ticks.into_iter().map(|e| e.0))
+                .map(
+                    |WorkingBankEntry {
+                         bank: _,
+                         entries_ticks,
+                     }| entries_ticks.into_iter().map(|e| e.0),
+                )
                 .flatten()
                 .collect();
             trace!("done");
@@ -2937,7 +2942,12 @@ mod tests {
             loop {
                 let entries: Vec<_> = entry_receiver
                     .iter()
-                    .map(|(_bank, entries_ticks)| entries_ticks.into_iter().map(|e| e.0))
+                    .map(
+                        |WorkingBankEntry {
+                             bank: _,
+                             entries_ticks,
+                         }| entries_ticks.into_iter().map(|e| e.0),
+                    )
                     .flatten()
                     .collect();
 
@@ -3056,7 +3066,12 @@ mod tests {
             // check that the balance is what we expect.
             let entries: Vec<_> = entry_receiver
                 .iter()
-                .map(|(_bank, entries_ticks)| entries_ticks.into_iter().map(|e| e.0))
+                .map(
+                    |WorkingBankEntry {
+                         bank: _,
+                         entries_ticks,
+                     }| entries_ticks.into_iter().map(|e| e.0),
+                )
                 .flatten()
                 .collect();
 
@@ -3125,7 +3140,10 @@ mod tests {
 
             let mut results = vec![new_execution_result(Ok(())); 2];
             let _ = BankingStage::record_transactions(bank.slot(), &txs, &results, &recorder);
-            let (_bank, entries_ticks) = entry_receiver.recv().unwrap();
+            let WorkingBankEntry {
+                bank: _,
+                entries_ticks,
+            } = entry_receiver.recv().unwrap();
             assert_eq!(entries_ticks.len(), 1);
             let entry = entries_ticks.get(0).unwrap().0.clone();
             assert_eq!(entry.transactions.len(), txs.len());
@@ -3142,7 +3160,10 @@ mod tests {
             } = BankingStage::record_transactions(bank.slot(), &txs, &results, &recorder);
             result.unwrap();
             assert!(retryable_indexes.is_empty());
-            let (_bank, entries_ticks) = entry_receiver.recv().unwrap();
+            let WorkingBankEntry {
+                bank: _,
+                entries_ticks,
+            } = entry_receiver.recv().unwrap();
             assert_eq!(entries_ticks.len(), 1);
             let entry = entries_ticks.get(0).unwrap().0.clone();
             assert_eq!(entry.transactions.len(), txs.len());
@@ -3156,7 +3177,10 @@ mod tests {
             } = BankingStage::record_transactions(bank.slot(), &txs, &results, &recorder);
             result.unwrap();
             assert!(retryable_indexes.is_empty());
-            let (_bank, entries_ticks) = entry_receiver.recv().unwrap();
+            let WorkingBankEntry {
+                bank: _,
+                entries_ticks,
+            } = entry_receiver.recv().unwrap();
             assert_eq!(entries_ticks.len(), 1);
             let entry = entries_ticks.get(0).unwrap().0.clone();
             assert_eq!(entry.transactions.len(), txs.len() - 1);
@@ -3408,7 +3432,11 @@ mod tests {
 
             let mut done = false;
             // read entries until I find mine, might be ticks...
-            while let Ok((_bank, entries_ticks)) = entry_receiver.recv() {
+            while let Ok(WorkingBankEntry {
+                bank: _,
+                entries_ticks,
+            }) = entry_receiver.recv()
+            {
                 assert_eq!(entries_ticks.len(), 1);
                 let entry = entries_ticks.get(0).unwrap().0.clone();
                 if !entry.is_tick() {
