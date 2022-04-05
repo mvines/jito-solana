@@ -243,7 +243,7 @@ fn main() {
             SocketAddrSpace::Unspecified,
         );
         let cluster_info = Arc::new(cluster_info);
-        let (tx, rx) = unbounded();
+        let (bundle_sender, bundle_receiver) = unbounded();
         let banking_stage = BankingStage::new(
             &cluster_info,
             &poh_recorder,
@@ -253,7 +253,7 @@ fn main() {
             None,
             replay_vote_sender,
             Arc::new(RwLock::new(CostModel::default())),
-            rx,
+            bundle_receiver,
         );
         poh_recorder.lock().unwrap().set_bank(&bank);
 
@@ -415,6 +415,7 @@ fn main() {
         drop(verified_sender);
         drop(tpu_vote_sender);
         drop(vote_sender);
+        drop(bundle_sender);
         exit.store(true, Ordering::Relaxed);
         banking_stage.join().unwrap();
         debug!("waited for banking_stage");

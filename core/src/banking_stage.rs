@@ -677,7 +677,7 @@ impl BankingStage {
 
             // TODO: add pre and post-balance checks that use the cached_accounts instead of the bank
             let mut mint_decimals: HashMap<Pubkey, u8> = HashMap::new();
-            let ((pre_balances, pre_token_balances), collect_balances_time) = Measure::this(
+            let ((pre_balances, pre_token_balances), _) = Measure::this(
                 |_| {
                     // Use a shorter maximum age when adding transactions into the pipeline.  This will reduce
                     // the likelihood of any single thread getting starved and processing old ids.
@@ -799,7 +799,7 @@ impl BankingStage {
             );
 
             // NOTE: these balances are out of date
-            let (_, find_and_send_votes_time) = Measure::this(
+            let (_, _) = Measure::this(
                 |_| {
                     // NOTE: don't need votes
                     bank_utils::find_and_send_votes(
