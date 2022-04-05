@@ -189,7 +189,6 @@ impl MevStage {
                 }
 
                 response = bundle_subscription.message() => {
-                    info!("bundle");
                     let response = response?.ok_or(MevStageError::GrpcStreamDisconnected)?;
                     let bundles = response
                         .bundles
@@ -210,7 +209,6 @@ impl MevStage {
                     let msg = response?.ok_or(MevStageError::GrpcStreamDisconnected)?.msg.ok_or(MevStageError::BadMessage)?;
                     match msg {
                         Msg::BatchList(batch_wrapper) => {
-                            info!("batches");
                             let packet_batches = batch_wrapper
                                 .batch_list
                                 .into_iter()
