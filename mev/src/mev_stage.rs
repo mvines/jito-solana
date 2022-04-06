@@ -1,21 +1,18 @@
 //! The `mev_stage` maintains a connection with the validator
 //! interface and streams packets from TPU proxy to the banking stage.
 
-use crate::proto::validator_interface::{SubscribeBundlesResponse, SubscribePacketsResponse};
-use crossbeam_channel::{select, tick, unbounded, Receiver, RecvError};
-use std::thread::sleep;
-use tokio::runtime::{Builder, Runtime};
 use {
     crate::{
         backoff::BackoffStrategy,
         bundle::Bundle,
         proto::validator_interface::{
             subscribe_packets_response::Msg, validator_interface_client::ValidatorInterfaceClient,
-            GetTpuConfigsRequest, SubscribeBundlesRequest, SubscribePacketsRequest,
+            GetTpuConfigsRequest, SubscribeBundlesRequest, SubscribeBundlesResponse,
+            SubscribePacketsRequest, SubscribePacketsResponse,
         },
         proto_packet_to_packet,
     },
-    crossbeam_channel::Sender,
+    crossbeam_channel::{select, tick, unbounded, Receiver, RecvError, Sender},
     log::*,
     solana_perf::packet::PacketBatch,
     solana_sdk::{
@@ -26,10 +23,11 @@ use {
     std::{
         net::{AddrParseError, IpAddr, Ipv4Addr, SocketAddr},
         sync::{Arc, RwLockReadGuard},
-        thread::{self, JoinHandle},
+        thread::{self, sleep, JoinHandle},
         time::Duration,
     },
     thiserror::Error,
+    tokio::runtime::{Builder, Runtime},
     tonic::{
         codegen::{http::uri::InvalidUri, InterceptedService},
         metadata::MetadataValue,
@@ -38,10 +36,6 @@ use {
         Status,
     },
 };
-
-pub struct MevStage {
-    validator_interface_thread: JoinHandle<()>,
-}
 
 #[derive(Error, Debug)]
 pub enum MevStageError {
@@ -202,7 +196,52 @@ enum HeartbeatEvent {
     },
 }
 
+pub struct MevStage {
+    proxy_thread: JoinHandle<()>,
+}
+
 impl MevStage {
+    fn spawn_proxy_thread(
+        validator_interface_address: Option<SocketAddr>,
+        interceptor: AuthenticationInjector,
+        verified_packet_sender: Sender<Vec<PacketBatch>>,
+        bundle_sender: Sender<Vec<Bundle>>,
+        heartbeat_timeout_ms: u64,
+        heartbeat_sender: Sender<HeartbeatEvent>,
+    ) -> JoinHandle<()> {
+        thread::Builder::new()
+            .name("proxy_thread".into())
+            .spawn(move || {
+                if validator_interface_address.is_none() {
+                    info!("no mev proxy address provided, exiting mev loop");
+                    return;
+                }
+
+                let addr = format!("http://{}", validator_interface_address.unwrap());
+                let mut backoff = BackoffStrategy::new();
+
+                loop {
+                    match Self::run_event_loops(
+                        &addr,
+                        &interceptor,
+                        &heartbeat_sender,
+                        &verified_packet_sender,
+                        &bundle_sender,
+                        heartbeat_timeout_ms,
+                    ) {
+                        Ok(_) => {
+                            backoff.reset();
+                        }
+                        Err(e) => {
+                            error!("error yo {}", e);
+                            sleep(Duration::from_millis(backoff.next_wait()));
+                        }
+                    }
+                }
+            })
+            .unwrap()
+    }
+
     pub fn new(
         keypair: RwLockReadGuard<Arc<Keypair>>,
         validator_interface_address: Option<SocketAddr>,
@@ -217,40 +256,18 @@ impl MevStage {
 
         let (heartbeat_sender, heartbeat_receiver) = unbounded();
 
-        let validator_interface_thread = thread::spawn(move || {
-            if validator_interface_address.is_none() {
-                info!("no mev proxy address provided, exiting mev loop");
-                return;
-            }
-
-            let addr = format!("http://{}", validator_interface_address.unwrap());
-            let mut backoff = BackoffStrategy::new();
-
-            loop {
-                match Self::run_event_loops(
-                    &addr,
-                    &interceptor,
-                    &heartbeat_sender,
-                    &verified_packet_sender,
-                    &bundle_sender,
-                    heartbeat_timeout_ms,
-                ) {
-                    Ok(_) => {
-                        backoff.reset();
-                    }
-                    Err(e) => {
-                        error!("error yo {}", e);
-                        sleep(Duration::from_millis(backoff.next_wait()));
-                    }
-                }
-            }
-        });
+        let proxy_thread = Self::spawn_proxy_thread(
+            validator_interface_address,
+            interceptor,
+            verified_packet_sender,
+            bundle_sender,
+            heartbeat_timeout_ms,
+            heartbeat_sender,
+        );
 
         info!("[MEV] Started recv verify stage");
 
-        Self {
-            validator_interface_thread,
-        }
+        Self { proxy_thread }
     }
 
     fn handle_bundle(
@@ -363,7 +380,7 @@ impl MevStage {
                 recv(heartbeat_receiver) -> msg => {
                     info!("heartbeat tick");
                     if !heartbeat_sent && !first_heartbeat {
-                        warn!("heartbeat late, disconnecting")
+                        warn!("heartbeat late, disconnecting");
                         return Err(MevStageError::HeartbeatError);
                     }
                     first_heartbeat = false;
@@ -426,6 +443,7 @@ impl MevStage {
     }
 
     pub fn join(self) -> thread::Result<()> {
-        self.validator_interface_thread.join()
+        self.proxy_thread.join()?;
+        Ok(())
     }
 }
