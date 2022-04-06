@@ -1,6 +1,8 @@
 //! The `mev_stage` maintains a connection with the validator
 //! interface and streams packets from TPU proxy to the banking stage.
 
+use crossbeam_channel::RecvTimeoutError;
+use solana_gossip::cluster_info::ClusterInfo;
 use {
     crate::{
         backoff::BackoffStrategy,
@@ -198,9 +200,107 @@ enum HeartbeatEvent {
 
 pub struct MevStage {
     proxy_thread: JoinHandle<()>,
+    heartbeat_thread: JoinHandle<()>,
 }
 
 impl MevStage {
+    pub fn new(
+        keypair: RwLockReadGuard<Arc<Keypair>>,
+        validator_interface_address: Option<SocketAddr>,
+        verified_packet_sender: Sender<Vec<PacketBatch>>,
+        bundle_sender: Sender<Vec<Bundle>>,
+        heartbeat_timeout_ms: u64,
+        cluster_info: &Arc<ClusterInfo>,
+    ) -> Self {
+        let msg = b"Let's get this money!".to_vec();
+        let sig: Signature = keypair.sign_message(msg.as_slice());
+        let pubkey = keypair.pubkey();
+        let interceptor = AuthenticationInjector::new(msg, sig, pubkey);
+
+        let (heartbeat_sender, heartbeat_receiver) = unbounded();
+
+        let proxy_thread = Self::spawn_proxy_thread(
+            validator_interface_address,
+            interceptor,
+            verified_packet_sender,
+            bundle_sender,
+            heartbeat_timeout_ms,
+            heartbeat_sender,
+        );
+
+        let heartbeat_thread =
+            Self::spawn_heartbeat_thread(heartbeat_receiver, heartbeat_timeout_ms, cluster_info);
+
+        info!("[MEV] Started recv verify stage");
+
+        Self {
+            proxy_thread,
+            heartbeat_thread,
+        }
+    }
+
+    fn spawn_heartbeat_thread(
+        heartbeat_receiver: Receiver<HeartbeatEvent>,
+        heartbeat_timeout_ms: u64,
+        cluster_info: &Arc<ClusterInfo>,
+    ) -> JoinHandle<()> {
+        let cluster_info = cluster_info.clone();
+        thread::Builder::new()
+            .name("proxy_thread".into())
+            .spawn(move || {
+                let saved_contact_info = cluster_info.my_contact_info();
+                let mut is_advertising_proxy = true;
+
+                loop {
+                    match heartbeat_receiver
+                        .recv_timeout(Duration::from_millis(heartbeat_timeout_ms))
+                    {
+                        Ok(HeartbeatEvent::Tick { tpu, tpu_fwd }) => {
+                            if !is_advertising_proxy {
+                                info!("advertising tpu proxy");
+                                Self::set_tpu_addresses(&cluster_info, tpu, tpu_fwd);
+                                is_advertising_proxy = true;
+                            }
+                        }
+                        Err(RecvTimeoutError::Timeout) => {
+                            if is_advertising_proxy {
+                                warn!(
+                                    "heartbeat timeout, reverting tpu and tpu_forwards addresses"
+                                );
+                                Self::set_tpu_addresses(
+                                    &cluster_info,
+                                    saved_contact_info.tpu,
+                                    saved_contact_info.tpu_forwards,
+                                );
+                                is_advertising_proxy = false;
+                            }
+                        }
+                        Err(RecvTimeoutError::Disconnected) => {
+                            warn!("heartbeat channel disconnected, shutting down");
+                            Self::set_tpu_addresses(
+                                &cluster_info,
+                                saved_contact_info.tpu,
+                                saved_contact_info.tpu_forwards,
+                            );
+                            break;
+                        }
+                    }
+                }
+            })
+            .unwrap()
+    }
+
+    fn set_tpu_addresses(
+        cluster_info: &Arc<ClusterInfo>,
+        tpu_address: SocketAddr,
+        tpu_forward_address: SocketAddr,
+    ) {
+        let mut new_contact_info = cluster_info.my_contact_info();
+        new_contact_info.tpu = tpu_address;
+        new_contact_info.tpu_forwards = tpu_forward_address;
+        cluster_info.set_my_contact_info(new_contact_info);
+    }
+
     fn spawn_proxy_thread(
         validator_interface_address: Option<SocketAddr>,
         interceptor: AuthenticationInjector,
@@ -221,7 +321,7 @@ impl MevStage {
                 let mut backoff = BackoffStrategy::new();
 
                 loop {
-                    match Self::run_event_loops(
+                    match Self::connect_and_stream(
                         &addr,
                         &interceptor,
                         &heartbeat_sender,
@@ -240,34 +340,6 @@ impl MevStage {
                 }
             })
             .unwrap()
-    }
-
-    pub fn new(
-        keypair: RwLockReadGuard<Arc<Keypair>>,
-        validator_interface_address: Option<SocketAddr>,
-        verified_packet_sender: Sender<Vec<PacketBatch>>,
-        bundle_sender: Sender<Vec<Bundle>>,
-        heartbeat_timeout_ms: u64,
-    ) -> Self {
-        let msg = b"Let's get this money!".to_vec();
-        let sig: Signature = keypair.sign_message(msg.as_slice());
-        let pubkey = keypair.pubkey();
-        let interceptor = AuthenticationInjector::new(msg, sig, pubkey);
-
-        let (heartbeat_sender, heartbeat_receiver) = unbounded();
-
-        let proxy_thread = Self::spawn_proxy_thread(
-            validator_interface_address,
-            interceptor,
-            verified_packet_sender,
-            bundle_sender,
-            heartbeat_timeout_ms,
-            heartbeat_sender,
-        );
-
-        info!("[MEV] Started recv verify stage");
-
-        Self { proxy_thread }
     }
 
     fn handle_bundle(
@@ -358,7 +430,7 @@ impl MevStage {
         Ok(is_heartbeat)
     }
 
-    fn streamer_loop(
+    fn stream_from_proxy(
         mut client: BlockingProxyClient,
         heartbeat_sender: &Sender<HeartbeatEvent>,
         tpu: SocketAddr,
@@ -377,7 +449,7 @@ impl MevStage {
 
         loop {
             select! {
-                recv(heartbeat_receiver) -> msg => {
+                recv(heartbeat_receiver) -> _ => {
                     info!("heartbeat tick");
                     if !heartbeat_sent && !first_heartbeat {
                         warn!("heartbeat late, disconnecting");
@@ -396,7 +468,7 @@ impl MevStage {
         }
     }
 
-    fn run_event_loops(
+    fn connect_and_stream(
         validator_interface_address: &str,
         auth_interceptor: &AuthenticationInjector,
         heartbeat_sender: &Sender<HeartbeatEvent>,
@@ -407,7 +479,7 @@ impl MevStage {
         let mut client = BlockingProxyClient::new(validator_interface_address, auth_interceptor)?;
         let (tpu, tpu_fwd) = client.fetch_tpu_config()?;
 
-        Self::streamer_loop(
+        Self::stream_from_proxy(
             client,
             heartbeat_sender,
             tpu,
@@ -418,32 +490,9 @@ impl MevStage {
         )
     }
 
-    async fn fetch_tpu_config(
-        client: &mut ValidatorInterfaceClientType,
-    ) -> Result<(SocketAddr, SocketAddr)> {
-        let tpu_configs = client
-            .get_tpu_configs(GetTpuConfigsRequest {})
-            .await?
-            .into_inner();
-
-        let tpu_addr = tpu_configs
-            .tpu
-            .ok_or(MevStageError::MissingTpuSocket("tpu".into()))?;
-        let tpu_forward_addr = tpu_configs
-            .tpu_forward
-            .ok_or(MevStageError::MissingTpuSocket("tpu_fwd".into()))?;
-
-        let tpu_ip = IpAddr::from(tpu_addr.ip.parse::<Ipv4Addr>()?);
-        let tpu_forward_ip = IpAddr::from(tpu_forward_addr.ip.parse::<Ipv4Addr>()?);
-
-        let tpu_socket = SocketAddr::new(tpu_ip, tpu_addr.port as u16);
-        let tpu_forward_socket = SocketAddr::new(tpu_forward_ip, tpu_forward_addr.port as u16);
-
-        Ok((tpu_socket, tpu_forward_socket))
-    }
-
     pub fn join(self) -> thread::Result<()> {
         self.proxy_thread.join()?;
+        self.heartbeat_thread.join()?;
         Ok(())
     }
 }

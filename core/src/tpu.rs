@@ -17,7 +17,7 @@ use {
     crossbeam_channel::{unbounded, Receiver},
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{blockstore::Blockstore, blockstore_processor::TransactionStatusSender},
-    solana_mev::{mev_stage::MevStage, tpu_proxy_advertiser::TpuProxyAdvertiser},
+    solana_mev::mev_stage::MevStage,
     solana_poh::poh_recorder::{PohRecorder, WorkingBankEntry},
     solana_rpc::{
         optimistically_confirmed_bank_tracker::BankNotificationSender,
@@ -169,9 +169,8 @@ impl Tpu {
             recv_verified_sender,
             bundle_sender,
             HEARTBEAT_TIMEOUT_MS,
+            cluster_info,
         );
-        // let tpu_proxy_advertiser =
-        //     TpuProxyAdvertiser::new(cluster_info, heartbeat_receiver, HEARTBEAT_TIMEOUT_MS);
 
         let (verified_gossip_vote_packets_sender, verified_gossip_vote_packets_receiver) =
             unbounded();
