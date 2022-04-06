@@ -334,7 +334,7 @@ impl MevStage {
                         }
                         Err(e) => {
                             error!("error yo {}", e);
-                            sleep(Duration::from_millis(backoff.next_wait()));
+                            sleep(Duration::from_millis(1000));
                         }
                     }
                 }

@@ -274,16 +274,11 @@ impl Accounts {
                             cached_accounts.unwrap_or(&HashMap::new()).get(key).cloned();
                         let (account, rent) = {
                             let account = match cached_account {
-                                None => {
-                                    info!("cache miss on {}", key);
-                                    self.accounts_db
-                                        .load_with_fixed_root(ancestors, key)
-                                        .map(|(account, _)| account)
-                                }
-                                Some(acc) => {
-                                    info!("cache hit on {}", key);
-                                    Some(acc)
-                                }
+                                None => self
+                                    .accounts_db
+                                    .load_with_fixed_root(ancestors, key)
+                                    .map(|(account, _)| account),
+                                Some(acc) => Some(acc),
                             };
 
                             account

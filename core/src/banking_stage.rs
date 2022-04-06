@@ -707,7 +707,7 @@ impl BankingStage {
                 .zip(batch.lock_results().iter())
                 .map(|(tx, lr)| (tx.signatures()[0].clone(), lr.clone()))
                 .collect();
-            info!("processing txs: {:?}", sigs);
+            // info!("processing txs: {:?}", sigs);
 
             let (mut load_and_execute_transactions_output, load_execute_time) = Measure::this(
                 |_| {
@@ -836,7 +836,7 @@ impl BankingStage {
         cached_accounts: &mut HashMap<Pubkey, AccountSharedData>,
     ) {
         let accounts = bank.collect_accounts_to_store(txs, res, loaded);
-        info!("caching accounts {:?}", accounts);
+        // info!("caching accounts {:?}", accounts);
         for (pubkey, data) in accounts {
             cached_accounts.insert(*pubkey, data.clone());
         }
