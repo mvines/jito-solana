@@ -1,7 +1,10 @@
 //! The `mev_stage` maintains a connection with the validator
 //! interface and streams packets from TPU proxy to the banking stage.
-//! It notifies the tpu_proxy_advertiser on connect/disconnect.
 
+use crate::proto::validator_interface::{SubscribeBundlesResponse, SubscribePacketsResponse};
+use crossbeam_channel::{select, tick, unbounded, Receiver, RecvError};
+use std::thread::sleep;
+use tokio::runtime::{Builder, Runtime};
 use {
     crate::{
         backoff::BackoffStrategy,
@@ -27,10 +30,6 @@ use {
         time::Duration,
     },
     thiserror::Error,
-    tokio::{
-        runtime::Runtime,
-        time::{self, sleep, Instant},
-    },
     tonic::{
         codegen::{http::uri::InvalidUri, InterceptedService},
         metadata::MetadataValue,
@@ -67,8 +66,6 @@ pub enum MevStageError {
 }
 
 type Result<T> = std::result::Result<T, MevStageError>;
-type ValidatorInterfaceClientType =
-    ValidatorInterfaceClient<InterceptedService<Channel, AuthenticationInjector>>;
 
 #[derive(Clone)]
 struct AuthenticationInjector {
@@ -104,12 +101,112 @@ impl Interceptor for AuthenticationInjector {
     }
 }
 
+type ValidatorInterfaceClientType =
+    ValidatorInterfaceClient<InterceptedService<Channel, AuthenticationInjector>>;
+
+struct BlockingProxyClient {
+    rt: Runtime,
+    client: ValidatorInterfaceClientType,
+}
+
+/// Blocking interface to the validator interface server
+impl BlockingProxyClient {
+    pub fn new(
+        validator_interface_address: &str,
+        auth_interceptor: &AuthenticationInjector,
+    ) -> Result<Self> {
+        let rt = Builder::new_multi_thread().enable_all().build().unwrap();
+        let channel =
+            rt.block_on(Endpoint::from_shared(validator_interface_address.to_string())?.connect())?;
+        let client = ValidatorInterfaceClient::with_interceptor(channel, auth_interceptor.clone());
+        Ok(Self { rt, client })
+    }
+
+    pub fn fetch_tpu_config(&mut self) -> Result<(SocketAddr, SocketAddr)> {
+        let tpu_configs = self
+            .rt
+            .block_on(self.client.get_tpu_configs(GetTpuConfigsRequest {}))?
+            .into_inner();
+
+        let tpu_addr = tpu_configs
+            .tpu
+            .ok_or(MevStageError::MissingTpuSocket("tpu".into()))?;
+        let tpu_forward_addr = tpu_configs
+            .tpu_forward
+            .ok_or(MevStageError::MissingTpuSocket("tpu_fwd".into()))?;
+
+        let tpu_ip = IpAddr::from(tpu_addr.ip.parse::<Ipv4Addr>()?);
+        let tpu_forward_ip = IpAddr::from(tpu_forward_addr.ip.parse::<Ipv4Addr>()?);
+
+        let tpu_socket = SocketAddr::new(tpu_ip, tpu_addr.port as u16);
+        let tpu_forward_socket = SocketAddr::new(tpu_forward_ip, tpu_forward_addr.port as u16);
+
+        Ok((tpu_socket, tpu_forward_socket))
+    }
+
+    pub fn subscribe_packets(
+        &mut self,
+    ) -> Result<(
+        tokio::task::JoinHandle<()>,
+        Receiver<std::result::Result<Option<SubscribePacketsResponse>, Status>>,
+    )> {
+        let mut packet_subscription = self
+            .rt
+            .block_on(self.client.subscribe_packets(SubscribePacketsRequest {}))?
+            .into_inner();
+
+        let (sender, receiver) = unbounded();
+        let handle = self.rt.spawn(async move {
+            loop {
+                let msg = packet_subscription.message().await;
+                let error = msg.is_err();
+                if sender.send(msg).is_err() || error {
+                    break;
+                }
+            }
+        });
+
+        Ok((handle, receiver))
+    }
+
+    pub fn subscribe_bundles(
+        &mut self,
+    ) -> Result<(
+        tokio::task::JoinHandle<()>,
+        Receiver<std::result::Result<Option<SubscribeBundlesResponse>, Status>>,
+    )> {
+        let mut bundle_subscription = self
+            .rt
+            .block_on(self.client.subscribe_bundles(SubscribeBundlesRequest {}))?
+            .into_inner();
+
+        let (sender, receiver) = unbounded();
+        let handle = self.rt.spawn(async move {
+            loop {
+                let msg = bundle_subscription.message().await;
+                let error = msg.is_err();
+                if sender.send(msg).is_err() || error {
+                    break;
+                }
+            }
+        });
+
+        Ok((handle, receiver))
+    }
+}
+
+enum HeartbeatEvent {
+    Tick {
+        tpu: SocketAddr,
+        tpu_fwd: SocketAddr,
+    },
+}
+
 impl MevStage {
     pub fn new(
         keypair: RwLockReadGuard<Arc<Keypair>>,
         validator_interface_address: Option<SocketAddr>,
         verified_packet_sender: Sender<Vec<PacketBatch>>,
-        heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
         bundle_sender: Sender<Vec<Bundle>>,
         heartbeat_timeout_ms: u64,
     ) -> Self {
@@ -118,27 +215,35 @@ impl MevStage {
         let pubkey = keypair.pubkey();
         let interceptor = AuthenticationInjector::new(msg, sig, pubkey);
 
-        let rt = Runtime::new().unwrap();
+        let (heartbeat_sender, heartbeat_receiver) = unbounded();
+
         let validator_interface_thread = thread::spawn(move || {
             if validator_interface_address.is_none() {
                 info!("no mev proxy address provided, exiting mev loop");
                 return;
             }
 
-            let verified_packet_sender = verified_packet_sender.clone();
-            let heartbeat_sender = heartbeat_sender.clone();
-            let bundle_sender = bundle_sender.clone();
+            let addr = format!("http://{}", validator_interface_address.unwrap());
+            let mut backoff = BackoffStrategy::new();
 
-            rt.block_on({
-                Self::validator_interface_connection_loop(
-                    interceptor,
-                    validator_interface_address,
-                    verified_packet_sender,
-                    heartbeat_sender,
-                    bundle_sender,
+            loop {
+                match Self::run_event_loops(
+                    &addr,
+                    &interceptor,
+                    &heartbeat_sender,
+                    &verified_packet_sender,
+                    &bundle_sender,
                     heartbeat_timeout_ms,
-                )
-            })
+                ) {
+                    Ok(_) => {
+                        backoff.reset();
+                    }
+                    Err(e) => {
+                        error!("error yo {}", e);
+                        sleep(Duration::from_millis(backoff.next_wait()));
+                    }
+                }
+            }
         });
 
         info!("[MEV] Started recv verify stage");
@@ -148,128 +253,145 @@ impl MevStage {
         }
     }
 
-    async fn streamer_loop(
-        mut client: ValidatorInterfaceClientType,
-        heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
-        tpu: SocketAddr,
-        tpu_fwd: SocketAddr,
-        verified_packet_sender: Sender<Vec<PacketBatch>>,
-        bundle_sender: Sender<Vec<Bundle>>,
-        heartbeat_timeout_ms: u64,
+    fn handle_bundle(
+        msg: std::result::Result<
+            std::result::Result<Option<SubscribeBundlesResponse>, Status>,
+            RecvError,
+        >,
+        bundle_sender: &Sender<Vec<Bundle>>,
     ) -> Result<()> {
-        let mut packet_subscription = client
-            .subscribe_packets(SubscribePacketsRequest {})
-            .await?
-            .into_inner();
-        info!("subscribed to packets");
+        match msg {
+            Ok(msg) => {
+                let response = msg?.ok_or(MevStageError::GrpcStreamDisconnected)?;
+                let bundles = response
+                    .bundles
+                    .into_iter()
+                    .map(|b| {
+                        let batch = PacketBatch::new(
+                            b.packets.into_iter().map(proto_packet_to_packet).collect(),
+                        );
+                        Bundle { batch }
+                    })
+                    .collect();
+                bundle_sender
+                    .send(bundles)
+                    .map_err(|_| MevStageError::ChannelError)?;
+            }
+            Err(_) => return Err(MevStageError::ChannelError),
+        }
+        Ok(())
+    }
 
-        let mut bundle_subscription = client
-            .subscribe_bundles(SubscribeBundlesRequest {})
-            .await?
-            .into_inner();
-        info!("subscribed to bundles");
-
-        let mut heartbeat_sent = false;
-        let heartbeat_dur = Duration::from_millis(heartbeat_timeout_ms);
-        let mut timeout_interval = time::interval_at(Instant::now() + heartbeat_dur, heartbeat_dur);
-
-        loop {
-            tokio::select! {
-                // biased causes the first branch to be evaluated first as opposed to random
-                biased;
-
-                _ = timeout_interval.tick() => {
-                    info!("tick, checking heartbeat");
-                    if !heartbeat_sent {
-                        warn!("heartbeat late, disconnecting");
-                        heartbeat_sender.send(None).map_err(|_| MevStageError::ChannelError)?;
+    fn handle_packet(
+        msg: std::result::Result<
+            std::result::Result<Option<SubscribePacketsResponse>, Status>,
+            RecvError,
+        >,
+        packet_sender: &Sender<Vec<PacketBatch>>,
+        heartbeat_sender: &Sender<HeartbeatEvent>,
+        tpu: &SocketAddr,
+        tpu_fwd: &SocketAddr,
+    ) -> Result<bool> {
+        let mut is_heartbeat = false;
+        match msg {
+            Ok(msg) => {
+                let msg = msg?
+                    .ok_or(MevStageError::GrpcStreamDisconnected)?
+                    .msg
+                    .ok_or(MevStageError::BadMessage)?;
+                match msg {
+                    Msg::BatchList(batch_wrapper) => {
+                        let packet_batches = batch_wrapper
+                            .batch_list
+                            .into_iter()
+                            .map(|batch| {
+                                PacketBatch::new(
+                                    batch
+                                        .packets
+                                        .into_iter()
+                                        .map(proto_packet_to_packet)
+                                        .collect(),
+                                )
+                            })
+                            .collect();
+                        packet_sender
+                            .send(packet_batches)
+                            .map_err(|_| MevStageError::ChannelError)?;
+                    }
+                    Msg::Heartbeat(true) => {
+                        info!("heartbeat");
+                        // always sends because tpu_proxy has its own fail-safe and can't assume
+                        // state
+                        heartbeat_sender
+                            .send(HeartbeatEvent::Tick {
+                                tpu: tpu.clone(),
+                                tpu_fwd: tpu_fwd.clone(),
+                            })
+                            .map_err(|_| MevStageError::ChannelError)?;
+                        is_heartbeat = true;
+                    }
+                    Msg::Heartbeat(false) => {
+                        info!("heartbeat false");
                         return Err(MevStageError::HeartbeatError);
                     }
+                }
+            }
+            Err(_) => return Err(MevStageError::ChannelError),
+        }
+        Ok(is_heartbeat)
+    }
+
+    fn streamer_loop(
+        mut client: BlockingProxyClient,
+        heartbeat_sender: &Sender<HeartbeatEvent>,
+        tpu: SocketAddr,
+        tpu_fwd: SocketAddr,
+        verified_packet_sender: &Sender<Vec<PacketBatch>>,
+        bundle_sender: &Sender<Vec<Bundle>>,
+        heartbeat_timeout_ms: u64,
+    ) -> Result<()> {
+        let mut heartbeat_sent = false;
+
+        let (_, packet_receiver) = client.subscribe_packets()?;
+        let (_, bundle_receiver) = client.subscribe_bundles()?;
+
+        let mut first_heartbeat = true;
+        let heartbeat_receiver = tick(Duration::from_millis(heartbeat_timeout_ms));
+
+        loop {
+            select! {
+                recv(heartbeat_receiver) -> msg => {
+                    info!("heartbeat tick");
+                    if !heartbeat_sent && !first_heartbeat {
+                        warn!("heartbeat late, disconnecting")
+                        return Err(MevStageError::HeartbeatError);
+                    }
+                    first_heartbeat = false;
                     heartbeat_sent = false;
                 }
-
-                response = bundle_subscription.message() => {
-                    let response = response?.ok_or(MevStageError::GrpcStreamDisconnected)?;
-                    let bundles = response
-                        .bundles
-                        .into_iter()
-                        .map(|b| {
-                            let batch = PacketBatch::new(
-                                b.packets.into_iter().map(proto_packet_to_packet).collect(),
-                            );
-                            Bundle { batch }
-                        })
-                        .collect();
-                    bundle_sender
-                        .send(bundles)
-                        .map_err(|_| MevStageError::ChannelError)?;
+                recv(bundle_receiver) -> msg => {
+                    Self::handle_bundle(msg, &bundle_sender)?;
                 }
-
-                response = packet_subscription.message() => {
-                    let msg = response?.ok_or(MevStageError::GrpcStreamDisconnected)?.msg.ok_or(MevStageError::BadMessage)?;
-                    match msg {
-                        Msg::BatchList(batch_wrapper) => {
-                            let packet_batches = batch_wrapper
-                                .batch_list
-                                .into_iter()
-                                .map(|batch| {
-                                    PacketBatch::new(
-                                        batch
-                                            .packets
-                                            .into_iter()
-                                            .map(proto_packet_to_packet)
-                                            .collect(),
-                                    )
-                                })
-                                .collect();
-                            verified_packet_sender
-                                .send(packet_batches)
-                                .map_err(|_| MevStageError::ChannelError)?;
-                        }
-                        Msg::Heartbeat(true) => {
-                            info!("heartbeat");
-                            // always sends because tpu_proxy has its own fail-safe and can't assume
-                            // state
-                            heartbeat_sender
-                            .send(Some((tpu.clone(), tpu_fwd.clone())))
-                            .map_err(|_| MevStageError::ChannelError)?;
-                            heartbeat_sent = true;
-                        },
-                        Msg::Heartbeat(false) => {
-                            info!("heartbeat false");
-                            // always sends because tpu_proxy has its own fail-safe and can't assume
-                            // state
-                            heartbeat_sender
-                            .send(None)
-                            .map_err(|_| MevStageError::ChannelError)?;
-                            return Err(MevStageError::HeartbeatError);
-                        },
-                    }
+                recv(packet_receiver) -> msg => {
+                    heartbeat_sent |= Self::handle_packet(msg, &verified_packet_sender, &heartbeat_sender, &tpu, &tpu_fwd)?;
                 }
             }
         }
     }
 
-    async fn run_event_loops(
-        validator_interface_address: String,
-        auth_interceptor: AuthenticationInjector,
-        heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
-        verified_packet_sender: Sender<Vec<PacketBatch>>,
-        bundle_sender: Sender<Vec<Bundle>>,
+    fn run_event_loops(
+        validator_interface_address: &str,
+        auth_interceptor: &AuthenticationInjector,
+        heartbeat_sender: &Sender<HeartbeatEvent>,
+        verified_packet_sender: &Sender<Vec<PacketBatch>>,
+        bundle_sender: &Sender<Vec<Bundle>>,
         heartbeat_timeout_ms: u64,
     ) -> Result<()> {
-        info!("connecting");
-        let channel = Endpoint::from_shared(validator_interface_address)?
-            .connect()
-            .await?;
-        info!("connected");
-        let mut client = ValidatorInterfaceClient::with_interceptor(channel, auth_interceptor);
-
-        let (tpu, tpu_fwd) = Self::fetch_tpu_config(&mut client).await?;
-        info!("fetch tpu config");
+        let mut client = BlockingProxyClient::new(validator_interface_address, auth_interceptor)?;
+        let (tpu, tpu_fwd) = client.fetch_tpu_config()?;
 
         Self::streamer_loop(
-            client.clone(),
+            client,
             heartbeat_sender,
             tpu,
             tpu_fwd,
@@ -277,7 +399,6 @@ impl MevStage {
             bundle_sender,
             heartbeat_timeout_ms,
         )
-        .await
     }
 
     async fn fetch_tpu_config(
@@ -302,49 +423,6 @@ impl MevStage {
         let tpu_forward_socket = SocketAddr::new(tpu_forward_ip, tpu_forward_addr.port as u16);
 
         Ok((tpu_socket, tpu_forward_socket))
-    }
-
-    // This function maintains a connection to the TPU
-    // proxy backend. It is long lived and should
-    // be called in a spawned thread. On connection
-    // it spawns a thread to read from the open connection
-    // and async forward to a passed unbounded channel.
-    async fn validator_interface_connection_loop(
-        interceptor: AuthenticationInjector,
-        validator_interface_address: Option<SocketAddr>,
-        verified_packet_sender: Sender<Vec<PacketBatch>>,
-        heartbeat_sender: Sender<Option<(SocketAddr, SocketAddr)>>,
-        bundle_sender: Sender<Vec<Bundle>>,
-        heartbeat_timeout_ms: u64,
-    ) {
-        if validator_interface_address.is_none() {
-            return;
-        }
-        let validator_interface_address = validator_interface_address.unwrap();
-        let addr = format!("http://{}", validator_interface_address);
-
-        loop {
-            let mut backoff = BackoffStrategy::new();
-
-            match Self::run_event_loops(
-                addr.clone(),
-                interceptor.clone(),
-                heartbeat_sender.clone(),
-                verified_packet_sender.clone(),
-                bundle_sender.clone(),
-                heartbeat_timeout_ms,
-            )
-            .await
-            {
-                Ok(_) => {
-                    backoff.reset();
-                }
-                Err(e) => {
-                    error!("error yo {}", e);
-                    sleep(Duration::from_millis(backoff.next_wait())).await;
-                }
-            }
-        }
     }
 
     pub fn join(self) -> thread::Result<()> {

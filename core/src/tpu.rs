@@ -56,7 +56,6 @@ pub struct Tpu {
     sigverify_stage: SigVerifyStage,
     vote_sigverify_stage: SigVerifyStage,
     recv_verify_stage: MevStage,
-    tpu_proxy_advertiser: TpuProxyAdvertiser,
     banking_stage: BankingStage,
     cluster_info_vote_listener: ClusterInfoVoteListener,
     broadcast_stage: BroadcastStage,
@@ -164,17 +163,15 @@ impl Tpu {
         // MEV TPU proxy packet injection
         let (bundle_sender, bundle_rx) = unbounded();
 
-        let (heartbeat_sender, heartbeat_receiver) = unbounded();
         let recv_verify_stage = MevStage::new(
             cluster_info.keypair(),
             validator_interface_address,
             recv_verified_sender,
-            heartbeat_sender,
             bundle_sender,
             HEARTBEAT_TIMEOUT_MS,
         );
-        let tpu_proxy_advertiser =
-            TpuProxyAdvertiser::new(cluster_info, heartbeat_receiver, HEARTBEAT_TIMEOUT_MS);
+        // let tpu_proxy_advertiser =
+        //     TpuProxyAdvertiser::new(cluster_info, heartbeat_receiver, HEARTBEAT_TIMEOUT_MS);
 
         let (verified_gossip_vote_packets_sender, verified_gossip_vote_packets_receiver) =
             unbounded();
@@ -222,7 +219,6 @@ impl Tpu {
             sigverify_stage,
             vote_sigverify_stage,
             recv_verify_stage,
-            tpu_proxy_advertiser,
             banking_stage,
             cluster_info_vote_listener,
             broadcast_stage,
@@ -242,7 +238,6 @@ impl Tpu {
             self.find_packet_sender_stake_stage.join(),
             self.vote_find_packet_sender_stake_stage.join(),
             self.recv_verify_stage.join(),
-            self.tpu_proxy_advertiser.join(),
         ];
         self.tpu_quic_t.join()?;
         let broadcast_result = self.broadcast_stage.join();
