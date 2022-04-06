@@ -228,6 +228,8 @@ impl MevStage {
                         }
                         Msg::Heartbeat(true) => {
                             info!("heartbeat");
+                            // always sends because tpu_proxy has its own fail-safe and can't assume
+                            // state
                             heartbeat_sender
                             .send(Some((tpu.clone(), tpu_fwd.clone())))
                             .map_err(|_| MevStageError::ChannelError)?;
@@ -235,6 +237,8 @@ impl MevStage {
                         },
                         Msg::Heartbeat(false) => {
                             info!("heartbeat false");
+                            // always sends because tpu_proxy has its own fail-safe and can't assume
+                            // state
                             heartbeat_sender
                             .send(None)
                             .map_err(|_| MevStageError::ChannelError)?;
