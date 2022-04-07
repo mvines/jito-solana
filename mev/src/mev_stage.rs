@@ -1,56 +1,36 @@
 //! The `mev_stage` maintains a connection with the validator
 //! interface and streams packets from TPU proxy to the banking stage.
 
+use crate::blocking_proxy_client::{AuthenticationInjector, BlockingProxyClient, ProxyError};
+use crate::proto::validator_interface::subscribe_packets_response::Msg;
+use crate::proto::validator_interface::{SubscribeBundlesResponse, SubscribePacketsResponse};
 use crossbeam_channel::RecvTimeoutError;
 use solana_gossip::cluster_info::ClusterInfo;
 use {
-    crate::{
-        backoff::BackoffStrategy,
-        bundle::Bundle,
-        proto::validator_interface::{
-            subscribe_packets_response::Msg, validator_interface_client::ValidatorInterfaceClient,
-            GetTpuConfigsRequest, SubscribeBundlesRequest, SubscribeBundlesResponse,
-            SubscribePacketsRequest, SubscribePacketsResponse,
-        },
-        proto_packet_to_packet,
-    },
+    crate::{backoff::BackoffStrategy, bundle::Bundle, proto_packet_to_packet},
     crossbeam_channel::{select, tick, unbounded, Receiver, RecvError, Sender},
     log::*,
     solana_perf::packet::PacketBatch,
     solana_sdk::{
-        pubkey::Pubkey,
         signature::{Keypair, Signature},
         signer::Signer,
     },
     std::{
-        net::{AddrParseError, IpAddr, Ipv4Addr, SocketAddr},
+        net::SocketAddr,
         sync::{Arc, RwLockReadGuard},
         thread::{self, sleep, JoinHandle},
         time::Duration,
     },
     thiserror::Error,
-    tokio::runtime::{Builder, Runtime},
-    tonic::{
-        codegen::{http::uri::InvalidUri, InterceptedService},
-        metadata::MetadataValue,
-        service::Interceptor,
-        transport::{Channel, Endpoint, Error},
-        Status,
-    },
+    tonic::Status,
 };
 
 #[derive(Error, Debug)]
 pub enum MevStageError {
-    #[error("bad uri error: {0}")]
-    BadUrl(#[from] InvalidUri),
-    #[error("connecting error: {0}")]
-    ConnectionError(#[from] Error),
+    #[error("proxy error: {0}")]
+    ProxyError(#[from] ProxyError),
     #[error("grpc error: {0}")]
     GrpcError(#[from] Status),
-    #[error("missing tpu socket: {0}")]
-    MissingTpuSocket(String),
-    #[error("invalid tpu socket: {0}")]
-    BadTpuSocket(#[from] AddrParseError),
     #[error("stream disconnected")]
     GrpcStreamDisconnected,
     #[error("bad packet message")]
@@ -62,134 +42,6 @@ pub enum MevStageError {
 }
 
 type Result<T> = std::result::Result<T, MevStageError>;
-
-#[derive(Clone)]
-struct AuthenticationInjector {
-    msg: Vec<u8>,
-    sig: Signature,
-    pubkey: Pubkey,
-}
-
-impl AuthenticationInjector {
-    pub fn new(msg: Vec<u8>, sig: Signature, pubkey: Pubkey) -> Self {
-        AuthenticationInjector { msg, sig, pubkey }
-    }
-}
-
-impl Interceptor for AuthenticationInjector {
-    fn call(
-        &mut self,
-        mut request: tonic::Request<()>,
-    ) -> std::result::Result<tonic::Request<()>, Status> {
-        request.metadata_mut().append_bin(
-            "public-key-bin",
-            MetadataValue::from_bytes(&self.pubkey.to_bytes()),
-        );
-        request.metadata_mut().append_bin(
-            "message-bin",
-            MetadataValue::from_bytes(self.msg.as_slice()),
-        );
-        request.metadata_mut().append_bin(
-            "signature-bin",
-            MetadataValue::from_bytes(self.sig.as_ref()),
-        );
-        Ok(request)
-    }
-}
-
-type ValidatorInterfaceClientType =
-    ValidatorInterfaceClient<InterceptedService<Channel, AuthenticationInjector>>;
-
-struct BlockingProxyClient {
-    rt: Runtime,
-    client: ValidatorInterfaceClientType,
-}
-
-/// Blocking interface to the validator interface server
-impl BlockingProxyClient {
-    pub fn new(
-        validator_interface_address: &str,
-        auth_interceptor: &AuthenticationInjector,
-    ) -> Result<Self> {
-        let rt = Builder::new_multi_thread().enable_all().build().unwrap();
-        let channel =
-            rt.block_on(Endpoint::from_shared(validator_interface_address.to_string())?.connect())?;
-        let client = ValidatorInterfaceClient::with_interceptor(channel, auth_interceptor.clone());
-        Ok(Self { rt, client })
-    }
-
-    pub fn fetch_tpu_config(&mut self) -> Result<(SocketAddr, SocketAddr)> {
-        let tpu_configs = self
-            .rt
-            .block_on(self.client.get_tpu_configs(GetTpuConfigsRequest {}))?
-            .into_inner();
-
-        let tpu_addr = tpu_configs
-            .tpu
-            .ok_or(MevStageError::MissingTpuSocket("tpu".into()))?;
-        let tpu_forward_addr = tpu_configs
-            .tpu_forward
-            .ok_or(MevStageError::MissingTpuSocket("tpu_fwd".into()))?;
-
-        let tpu_ip = IpAddr::from(tpu_addr.ip.parse::<Ipv4Addr>()?);
-        let tpu_forward_ip = IpAddr::from(tpu_forward_addr.ip.parse::<Ipv4Addr>()?);
-
-        let tpu_socket = SocketAddr::new(tpu_ip, tpu_addr.port as u16);
-        let tpu_forward_socket = SocketAddr::new(tpu_forward_ip, tpu_forward_addr.port as u16);
-
-        Ok((tpu_socket, tpu_forward_socket))
-    }
-
-    pub fn subscribe_packets(
-        &mut self,
-    ) -> Result<(
-        tokio::task::JoinHandle<()>,
-        Receiver<std::result::Result<Option<SubscribePacketsResponse>, Status>>,
-    )> {
-        let mut packet_subscription = self
-            .rt
-            .block_on(self.client.subscribe_packets(SubscribePacketsRequest {}))?
-            .into_inner();
-
-        let (sender, receiver) = unbounded();
-        let handle = self.rt.spawn(async move {
-            loop {
-                let msg = packet_subscription.message().await;
-                let error = msg.is_err();
-                if sender.send(msg).is_err() || error {
-                    break;
-                }
-            }
-        });
-
-        Ok((handle, receiver))
-    }
-
-    pub fn subscribe_bundles(
-        &mut self,
-    ) -> Result<(
-        tokio::task::JoinHandle<()>,
-        Receiver<std::result::Result<Option<SubscribeBundlesResponse>, Status>>,
-    )> {
-        let mut bundle_subscription = self
-            .rt
-            .block_on(self.client.subscribe_bundles(SubscribeBundlesRequest {}))?
-            .into_inner();
-
-        let (sender, receiver) = unbounded();
-        let handle = self.rt.spawn(async move {
-            loop {
-                let msg = bundle_subscription.message().await;
-                let error = msg.is_err();
-                if sender.send(msg).is_err() || error {
-                    break;
-                }
-            }
-        });
-
-        Ok((handle, receiver))
-    }
-}
 
 enum HeartbeatEvent {
     Tick {

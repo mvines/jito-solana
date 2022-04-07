@@ -29,6 +29,7 @@ pub mod proto {
 }
 
 mod backoff;
+pub mod blocking_proxy_client;
 pub mod bundle;
 pub mod mev_stage;
 
