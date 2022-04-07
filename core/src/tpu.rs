@@ -55,7 +55,7 @@ pub struct Tpu {
     fetch_stage: FetchStage,
     sigverify_stage: SigVerifyStage,
     vote_sigverify_stage: SigVerifyStage,
-    recv_verify_stage: MevStage,
+    mev_stage: MevStage,
     banking_stage: BankingStage,
     cluster_info_vote_listener: ClusterInfoVoteListener,
     broadcast_stage: BroadcastStage,
@@ -131,9 +131,6 @@ impl Tpu {
             cluster_info.clone(),
         );
 
-        let (verified_sender, verified_receiver) = unbounded();
-        let recv_verified_sender = verified_sender.clone();
-
         let tpu_quic_t = solana_streamer::quic::spawn_server(
             transactions_quic_sockets,
             keypair,
@@ -143,6 +140,19 @@ impl Tpu {
             MAX_QUIC_CONNECTIONS_PER_IP,
         )
         .unwrap();
+
+        let (verified_sender, verified_receiver) = unbounded();
+
+        // MEV TPU proxy packet injection
+        let (bundle_sender, bundle_rx) = unbounded();
+        let mev_stage = MevStage::new(
+            cluster_info.keypair(),
+            validator_interface_address,
+            verified_sender.clone(),
+            bundle_sender,
+            HEARTBEAT_TIMEOUT_MS,
+            cluster_info,
+        );
 
         let sigverify_stage = {
             let verifier = TransactionSigVerifier::default();
@@ -159,18 +169,6 @@ impl Tpu {
                 verifier,
             )
         };
-
-        // MEV TPU proxy packet injection
-        let (bundle_sender, bundle_rx) = unbounded();
-
-        let recv_verify_stage = MevStage::new(
-            cluster_info.keypair(),
-            validator_interface_address,
-            recv_verified_sender,
-            bundle_sender,
-            HEARTBEAT_TIMEOUT_MS,
-            cluster_info,
-        );
 
         let (verified_gossip_vote_packets_sender, verified_gossip_vote_packets_receiver) =
             unbounded();
@@ -217,7 +215,7 @@ impl Tpu {
             fetch_stage,
             sigverify_stage,
             vote_sigverify_stage,
-            recv_verify_stage,
+            mev_stage,
             banking_stage,
             cluster_info_vote_listener,
             broadcast_stage,
@@ -236,7 +234,7 @@ impl Tpu {
             self.banking_stage.join(),
             self.find_packet_sender_stake_stage.join(),
             self.vote_find_packet_sender_stake_stage.join(),
-            self.recv_verify_stage.join(),
+            self.mev_stage.join(),
         ];
         self.tpu_quic_t.join()?;
         let broadcast_result = self.broadcast_stage.join();

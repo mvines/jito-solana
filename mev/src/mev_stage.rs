@@ -249,7 +249,7 @@ impl MevStage {
             .name("proxy_thread".into())
             .spawn(move || {
                 let saved_contact_info = cluster_info.my_contact_info();
-                let mut is_advertising_proxy = true;
+                let mut is_advertising_proxy = false;
 
                 loop {
                     match heartbeat_receiver

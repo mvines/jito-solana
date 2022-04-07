@@ -31,7 +31,6 @@ pub mod proto {
 mod backoff;
 pub mod bundle;
 pub mod mev_stage;
-pub mod tpu_proxy_advertiser;
 
 const UNKNOWN_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
 

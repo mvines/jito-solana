@@ -54,7 +54,6 @@ use {
         message::Message,
         pubkey::Pubkey,
         saturating_add_assign,
-        signature::Signature,
         timing::{duration_as_ms, timestamp, AtomicInterval},
         transaction::{
             self, AddressLoader, SanitizedTransaction, TransactionError, VersionedTransaction,
@@ -701,12 +700,12 @@ impl BankingStage {
                 "collect_balances",
             );
 
-            let sigs: Vec<(Signature, transaction::Result<()>)> = batch
-                .sanitized_transactions()
-                .iter()
-                .zip(batch.lock_results().iter())
-                .map(|(tx, lr)| (tx.signatures()[0].clone(), lr.clone()))
-                .collect();
+            // let sigs: Vec<(Signature, transaction::Result<()>)> = batch
+            //     .sanitized_transactions()
+            //     .iter()
+            //     .zip(batch.lock_results().iter())
+            //     .map(|(tx, lr)| (tx.signatures()[0].clone(), lr.clone()))
+            //     .collect();
             // info!("processing txs: {:?}", sigs);
 
             let (mut load_and_execute_transactions_output, load_execute_time) = Measure::this(
@@ -919,7 +918,6 @@ impl BankingStage {
             // TODO (LB): probably want to lock all the other tx procesing pipelines (except votes) until this is done
             for bundle in bundles {
                 let bundle_txs = Self::get_bundle_txs(bundle.clone(), working_bank);
-                // info!("bundle [bundle={:?}, txs={:?}]", bundle, bundle_txs);
                 match Self::execute_bundle(
                     bundle_txs,
                     working_bank,
