@@ -185,7 +185,7 @@ impl MevStage {
                             backoff.reset();
                         }
                         Err(e) => {
-                            error!("error yo {}", e);
+                            error!("spawn_proxy_thread error [error: {}]", e);
                             sleep(Duration::from_millis(1000));
                         }
                     }
