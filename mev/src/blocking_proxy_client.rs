@@ -1,20 +1,22 @@
-use crate::proto::validator_interface::validator_interface_client::ValidatorInterfaceClient;
-use crate::proto::validator_interface::{
-    GetTpuConfigsRequest, SubscribeBundlesRequest, SubscribeBundlesResponse,
-    SubscribePacketsRequest, SubscribePacketsResponse,
+use {
+    crate::proto::validator_interface::{
+        validator_interface_client::ValidatorInterfaceClient, GetTpuConfigsRequest,
+        SubscribeBundlesRequest, SubscribeBundlesResponse, SubscribePacketsRequest,
+        SubscribePacketsResponse,
+    },
+    crossbeam_channel::{unbounded, Receiver},
+    solana_sdk::{pubkey::Pubkey, signature::Signature},
+    std::net::{AddrParseError, IpAddr, Ipv4Addr, SocketAddr},
+    thiserror::Error,
+    tokio::runtime::{Builder, Runtime},
+    tonic::{
+        codegen::{http::uri::InvalidUri, InterceptedService},
+        metadata::MetadataValue,
+        service::Interceptor,
+        transport::{Channel, Endpoint, Error},
+        Status,
+    },
 };
-use crossbeam_channel::{unbounded, Receiver};
-use solana_sdk::pubkey::Pubkey;
-use solana_sdk::signature::Signature;
-use std::net::{AddrParseError, IpAddr, Ipv4Addr, SocketAddr};
-use thiserror::Error;
-use tokio::runtime::{Builder, Runtime};
-use tonic::codegen::http::uri::InvalidUri;
-use tonic::codegen::InterceptedService;
-use tonic::metadata::MetadataValue;
-use tonic::service::Interceptor;
-use tonic::transport::{Channel, Endpoint, Error};
-use tonic::Status;
 
 type ValidatorInterfaceClientType =
     ValidatorInterfaceClient<InterceptedService<Channel, AuthenticationInjector>>;

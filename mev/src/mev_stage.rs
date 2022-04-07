@@ -1,15 +1,19 @@
 //! The `mev_stage` maintains a connection with the validator
 //! interface and streams packets from TPU proxy to the banking stage.
 
-use crate::blocking_proxy_client::{AuthenticationInjector, BlockingProxyClient, ProxyError};
-use crate::proto::validator_interface::subscribe_packets_response::Msg;
-use crate::proto::validator_interface::{SubscribeBundlesResponse, SubscribePacketsResponse};
-use crossbeam_channel::RecvTimeoutError;
-use solana_gossip::cluster_info::ClusterInfo;
 use {
-    crate::{backoff::BackoffStrategy, bundle::Bundle, proto_packet_to_packet},
-    crossbeam_channel::{select, tick, unbounded, Receiver, RecvError, Sender},
+    crate::{
+        backoff::BackoffStrategy,
+        blocking_proxy_client::{AuthenticationInjector, BlockingProxyClient, ProxyError},
+        bundle::Bundle,
+        proto::validator_interface::{
+            subscribe_packets_response::Msg, SubscribeBundlesResponse, SubscribePacketsResponse,
+        },
+        proto_packet_to_packet,
+    },
+    crossbeam_channel::{select, tick, unbounded, Receiver, RecvError, RecvTimeoutError, Sender},
     log::*,
+    solana_gossip::cluster_info::ClusterInfo,
     solana_perf::packet::PacketBatch,
     solana_sdk::{
         signature::{Keypair, Signature},
