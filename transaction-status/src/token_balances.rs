@@ -1,3 +1,6 @@
+use solana_runtime::bank::TransactionBalances;
+use solana_sdk::account::AccountSharedData;
+use std::sync::Arc;
 use {
     crate::TransactionTokenBalance,
     solana_account_decoder::parse_token::{
@@ -53,10 +56,31 @@ fn get_mint_decimals(bank: &Bank, mint: &Pubkey) -> Option<u8> {
     }
 }
 
+pub fn collect_balances_with_cache(
+    batch: &TransactionBatch,
+    bank: &Arc<Bank>,
+    cached_accounts: &HashMap<Pubkey, AccountSharedData>,
+) -> TransactionBalances {
+    let mut balances: TransactionBalances = vec![];
+    for transaction in batch.sanitized_transactions() {
+        let mut transaction_balances: Vec<u64> = vec![];
+        for account_key in transaction.message().account_keys().iter() {
+            let balance = match cached_accounts.get(account_key) {
+                Some(data) => Bank::read_balance(data),
+                None => bank.get_balance(account_key),
+            };
+            transaction_balances.push(balance);
+        }
+        balances.push(transaction_balances);
+    }
+    balances
+}
+
 pub fn collect_token_balances(
     bank: &Bank,
     batch: &TransactionBatch,
     mint_decimals: &mut HashMap<Pubkey, u8>,
+    cached_accounts: Option<&HashMap<Pubkey, AccountSharedData>>,
 ) -> TransactionTokenBalances {
     let mut balances: TransactionTokenBalances = vec![];
     let mut collect_time = Measure::start("collect_token_balances");
@@ -76,8 +100,12 @@ pub fn collect_token_balances(
                     mint,
                     ui_token_amount,
                     owner,
-                }) = collect_token_balance_from_account(bank, account_id, mint_decimals)
-                {
+                }) = collect_token_balance_from_account(
+                    bank,
+                    account_id,
+                    mint_decimals,
+                    cached_accounts,
+                ) {
                     transaction_balances.push(TransactionTokenBalance {
                         account_index: index as u8,
                         mint,
@@ -108,8 +136,15 @@ fn collect_token_balance_from_account(
     bank: &Bank,
     account_id: &Pubkey,
     mint_decimals: &mut HashMap<Pubkey, u8>,
+    cached_accounts: Option<&HashMap<Pubkey, AccountSharedData>>,
 ) -> Option<TokenBalanceData> {
-    let account = bank.get_account(account_id)?;
+    let account = match cached_accounts
+        .unwrap_or(&HashMap::default())
+        .get(account_id)
+    {
+        None => bank.get_account(account_id),
+        Some(account) => Some(account.clone()),
+    }?;
 
     if !is_known_spl_token_id(account.owner()) {
         return None;
@@ -243,12 +278,12 @@ mod test {
         let mut mint_decimals = HashMap::new();
 
         assert_eq!(
-            collect_token_balance_from_account(&bank, &account_pubkey, &mut mint_decimals),
+            collect_token_balance_from_account(&bank, &account_pubkey, &mut mint_decimals, None),
             None
         );
 
         assert_eq!(
-            collect_token_balance_from_account(&bank, &mint_pubkey, &mut mint_decimals),
+            collect_token_balance_from_account(&bank, &mint_pubkey, &mut mint_decimals, None),
             None
         );
 
@@ -256,7 +291,8 @@ mod test {
             collect_token_balance_from_account(
                 &bank,
                 &spl_token_account_pubkey,
-                &mut mint_decimals
+                &mut mint_decimals,
+                None
             ),
             Some(TokenBalanceData {
                 mint: mint_pubkey.to_string(),
@@ -271,7 +307,12 @@ mod test {
         );
 
         assert_eq!(
-            collect_token_balance_from_account(&bank, &other_account_pubkey, &mut mint_decimals),
+            collect_token_balance_from_account(
+                &bank,
+                &other_account_pubkey,
+                &mut mint_decimals,
+                None
+            ),
             None
         );
 
@@ -279,7 +320,8 @@ mod test {
             collect_token_balance_from_account(
                 &bank,
                 &other_mint_account_pubkey,
-                &mut mint_decimals
+                &mut mint_decimals,
+                None
             ),
             None
         );

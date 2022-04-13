@@ -1,6 +1,7 @@
 //! The `banking_stage` processes Transaction messages. It is intended to be used
 //! to contruct a software pipeline. The stage uses all available CPU cores and
 //! can do its processing in parallel with signature verification on the GPU.
+use solana_transaction_status::token_balances::collect_balances_with_cache;
 use {
     crate::{
         leader_slot_banking_stage_metrics::{LeaderSlotMetricsTracker, ProcessTransactionsSummary},
@@ -632,6 +633,8 @@ impl BankingStage {
         let mut cached_accounts = HashMap::with_capacity(20);
 
         let mut execution_results = Vec::new();
+        let mut mint_decimals: HashMap<Pubkey, u8> = HashMap::new();
+
         while chunk_start != transactions.len() {
             if !Bank::should_bank_still_be_processing_txs(bank_creation_time, bank.ns_per_slot) {
                 return Err(PohRecorderError::MaxHeightReached.into());
@@ -674,8 +677,6 @@ impl BankingStage {
             // Execute batch
             // *********************************************************************************
 
-            // TODO: add pre and post-balance checks that use the cached_accounts instead of the bank
-            let mut mint_decimals: HashMap<Pubkey, u8> = HashMap::new();
             let ((pre_balances, pre_token_balances), _) = Measure::this(
                 |_| {
                     // Use a shorter maximum age when adding transactions into the pipeline.  This will reduce
@@ -683,13 +684,18 @@ impl BankingStage {
                     // TODO: Banking stage threads should be prioritized to complete faster then this queue
                     // expires.
                     let pre_balances = if transaction_status_sender.is_some() {
-                        bank.collect_balances(&batch)
+                        collect_balances_with_cache(&batch, bank, &cached_accounts)
                     } else {
                         vec![]
                     };
 
                     let pre_token_balances = if transaction_status_sender.is_some() {
-                        collect_token_balances(bank, &batch, &mut mint_decimals)
+                        collect_token_balances(
+                            bank,
+                            &batch,
+                            &mut mint_decimals,
+                            Some(&cached_accounts),
+                        )
                     } else {
                         vec![]
                     };
@@ -699,14 +705,6 @@ impl BankingStage {
                 (),
                 "collect_balances",
             );
-
-            // let sigs: Vec<(Signature, transaction::Result<()>)> = batch
-            //     .sanitized_transactions()
-            //     .iter()
-            //     .zip(batch.lock_results().iter())
-            //     .map(|(tx, lr)| (tx.signatures()[0].clone(), lr.clone()))
-            //     .collect();
-            // info!("processing txs: {:?}", sigs);
 
             let (mut load_and_execute_transactions_output, load_execute_time) = Measure::this(
                 |_| {
@@ -746,10 +744,34 @@ impl BankingStage {
                 &mut cached_accounts,
             );
 
-            // TODO (LB): collect post-balances from cached accounts
-            // TODO (LB): probably want to cache to status_cache
-            let post_balances = bank.collect_balances(&batch);
-            let post_token_balances = collect_token_balances(bank, &batch, &mut mint_decimals);
+            let ((post_balances, post_token_balances), _) = Measure::this(
+                |_| {
+                    // Use a shorter maximum age when adding transactions into the pipeline.  This will reduce
+                    // the likelihood of any single thread getting starved and processing old ids.
+                    // TODO: Banking stage threads should be prioritized to complete faster then this queue
+                    // expires.
+                    let pre_balances = if transaction_status_sender.is_some() {
+                        collect_balances_with_cache(&batch, bank, &cached_accounts)
+                    } else {
+                        vec![]
+                    };
+
+                    let pre_token_balances = if transaction_status_sender.is_some() {
+                        collect_token_balances(
+                            bank,
+                            &batch,
+                            &mut mint_decimals,
+                            Some(&cached_accounts),
+                        )
+                    } else {
+                        vec![]
+                    };
+
+                    (pre_balances, pre_token_balances)
+                },
+                (),
+                "collect_balances",
+            );
 
             execution_results.push(AllExecutionResults {
                 load_and_execute_tx_output: load_and_execute_transactions_output,
@@ -1722,7 +1744,7 @@ impl BankingStage {
                 };
 
                 let pre_token_balances = if transaction_status_sender.is_some() {
-                    collect_token_balances(bank, batch, &mut mint_decimals)
+                    collect_token_balances(bank, batch, &mut mint_decimals, None)
                 } else {
                     vec![]
                 };
@@ -1859,7 +1881,7 @@ impl BankingStage {
                         let txs = batch.sanitized_transactions().to_vec();
                         let post_balances = bank.collect_balances(batch);
                         let post_token_balances =
-                            collect_token_balances(bank, batch, &mut mint_decimals);
+                            collect_token_balances(bank, batch, &mut mint_decimals, None);
                         transaction_status_sender.send_transaction_status_batch(
                             bank.clone(),
                             txs,
