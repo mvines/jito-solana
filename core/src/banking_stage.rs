@@ -721,10 +721,8 @@ impl BankingStage {
                 "load_execute",
             );
             execute_and_commit_timings.load_execute_us = load_execute_time.as_us();
-            // info!(
-            //     "load_and_execute_transactions_output.execution_results: {:?}",
-            //     load_and_execute_transactions_output.execution_results
-            // );
+
+            // TODO (LB): rollback QoS for non-executed transactions
 
             Self::check_all_executed_ok(
                 &load_and_execute_transactions_output
@@ -746,10 +744,6 @@ impl BankingStage {
 
             let ((post_balances, post_token_balances), _) = Measure::this(
                 |_| {
-                    // Use a shorter maximum age when adding transactions into the pipeline.  This will reduce
-                    // the likelihood of any single thread getting starved and processing old ids.
-                    // TODO: Banking stage threads should be prioritized to complete faster then this queue
-                    // expires.
                     let pre_balances = if transaction_status_sender.is_some() {
                         collect_balances_with_cache(&batch, bank, &cached_accounts)
                     } else {
@@ -797,10 +791,7 @@ impl BankingStage {
             Measure::this(|_| bank.freeze_lock(), (), "freeze_lock");
 
         let record = Self::prepare_poh_record_bundle(&bank.slot(), &execution_results);
-        // info!("recording to poh {:?}", record);
-        let _ = recorder.record(record)?;
-
-        // info!("committing");
+        recorder.record(record)?;
 
         for r in execution_results {
             let mut output = r.load_and_execute_tx_output;
@@ -819,10 +810,8 @@ impl BankingStage {
                 &mut execute_and_commit_timings.execute_timings,
             );
 
-            // NOTE: these balances are out of date
             let (_, _) = Measure::this(
                 |_| {
-                    // NOTE: don't need votes
                     bank_utils::find_and_send_votes(
                         &sanitized_txs,
                         &commit_result,

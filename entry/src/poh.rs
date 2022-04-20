@@ -75,12 +75,11 @@ impl Poh {
     }
 
     pub fn record(&mut self, mixin: Hash) -> Option<PohEntry> {
-        self.record_bundle(&vec![mixin])
-            .map(|entries| entries[0].clone())
+        let entries = self.record_bundle(&vec![mixin]);
+        entries.unwrap_or_default().pop()
     }
 
     pub fn record_bundle(&mut self, mixins: &[Hash]) -> Option<Vec<PohEntry>> {
-        // TODO (LB) double check this is right
         if self.remaining_hashes <= mixins.len() as u64 {
             return None; // Caller needs to `tick()` first
         }
