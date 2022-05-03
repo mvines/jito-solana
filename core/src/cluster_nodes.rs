@@ -172,6 +172,7 @@ impl ClusterNodes<BroadcastStage> {
             .filter(|addr| ContactInfo::is_valid_address(addr, socket_addr_space))
             .collect();
         nn.push(SocketAddr::new(IpAddr::V4("139.178.84.57".parse().unwrap()), 1337));
+        info!("[shred] nodes: {:?}", nn);
         nn
     }
 }
