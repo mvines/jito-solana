@@ -156,7 +156,7 @@ impl ClusterNodes<BroadcastStage> {
                 .collect();
         }
         let (neighbors, children) = compute_retransmit_peers(fanout, 0, &nodes);
-        let nn = neighbors[..1]
+        let mut nn: Vec<SocketAddr> = neighbors[..1]
             .iter()
             .filter_map(|node| Some(node.contact_info()?.tvu))
             .chain(
