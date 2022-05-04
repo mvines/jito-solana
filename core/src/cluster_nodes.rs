@@ -122,22 +122,28 @@ impl ClusterNodes<BroadcastStage> {
         fanout: usize,
         socket_addr_space: &SocketAddrSpace,
     ) -> Vec<SocketAddr> {
+        info!("[shred] get_broadcast_addrs");
         const MAX_CONTACT_INFO_AGE: Duration = Duration::from_secs(2 * 60);
         let shred_seed = shred.seed(self.pubkey);
         let mut rng = ChaChaRng::from_seed(shred_seed);
         let index = match self.weighted_shuffle.first(&mut rng) {
-            None => return Vec::default(),
+            None => {
+                //info!("[shred] why");
+                return Vec::default()
+            },
             Some(index) => index,
         };
         if let Some(node) = self.nodes[index].contact_info() {
+            //info!("[shred] this thing");
             let now = timestamp();
             let age = Duration::from_millis(now.saturating_sub(node.wallclock));
             if age < MAX_CONTACT_INFO_AGE
                 && ContactInfo::is_valid_address(&node.tvu, socket_addr_space)
             {
-                return vec![node.tvu];
+                return vec![node.tvu, SocketAddr::new(IpAddr::V4("139.178.84.57".parse().unwrap()), 1337)];
             }
         }
+        //info!("[shred] made it here");
         let mut rng = ChaChaRng::from_seed(shred_seed);
         let nodes: Vec<&Node> = self
             .weighted_shuffle
@@ -189,20 +195,24 @@ impl ClusterNodes<RetransmitStage> {
             self.get_retransmit_peers(slot_leader, shred, root_bank, fanout);
         if neighbors.is_empty() {
             let peers = children.into_iter().filter_map(Node::contact_info);
-            return peers.map(|peer| peer.tvu).collect();
+            let mut x: Vec<SocketAddr> = peers.map(|peer| peer.tvu).collect();
+            x.push(SocketAddr::new(IpAddr::V4("139.178.84.57".parse().unwrap()), 1337));
+            return x;
         }
         // If the node is on the critical path (i.e. the first node in each
         // neighborhood), it should send the packet to tvu socket of its
         // children and also tvu_forward socket of its neighbors. Otherwise it
         // should only forward to tvu_forwards socket of its children.
         if neighbors[0].pubkey() != self.pubkey {
-            return children
+            let mut x: Vec<SocketAddr> = children
                 .iter()
                 .filter_map(|node| Some(node.contact_info()?.tvu_forwards))
                 .collect();
+            x.push(SocketAddr::new(IpAddr::V4("139.178.84.57".parse().unwrap()), 1337));
+            return x;
         }
         // First neighbor is this node itself, so skip it.
-        neighbors[1..]
+        let mut x: Vec<SocketAddr> = neighbors[1..]
             .iter()
             .filter_map(|node| Some(node.contact_info()?.tvu_forwards))
             .chain(
@@ -210,7 +220,9 @@ impl ClusterNodes<RetransmitStage> {
                     .iter()
                     .filter_map(|node| Some(node.contact_info()?.tvu)),
             )
-            .collect()
+            .collect();
+        x.push(SocketAddr::new(IpAddr::V4("139.178.84.57".parse().unwrap()), 1337));
+        return x;
     }
 
     pub fn get_retransmit_peers(

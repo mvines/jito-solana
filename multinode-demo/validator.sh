@@ -344,7 +344,7 @@ setup_validator_accounts "$node_sol"
 while true; do
   echo "$PS4$program ${args[*]}"
 
-  $program "${args[@]}" &
+  $program "--validator_interface_address" "127.0.0.1:80" "${args[@]}" &
   pid=$!
   echo "pid: $pid"
 

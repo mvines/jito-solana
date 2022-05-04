@@ -146,6 +146,7 @@ args+=(
   --no-os-network-limits-test
   --no-wait-for-vote-to-start-leader
   --full-rpc-api
+  --validator_interface_address 127.0.0.1:80
 )
 default_arg --gossip-port 8001
 default_arg --log -
