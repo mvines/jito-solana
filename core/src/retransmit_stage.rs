@@ -46,6 +46,7 @@ use {
     },
 };
 use solana_ledger::shred::ShredType;
+use chrono::prelude::*;
 
 const MAX_DUPLICATE_COUNT: usize = 2;
 const DEFAULT_LRU_SIZE: usize = 10_000;
@@ -301,7 +302,7 @@ fn retransmit(
             if shred.shred_type() == ShredType::Data {
                 t = "Data"
             }
-            info!("[shred] slot:{}, index:{}, type:{}, now:{:?}", shred.slot(), shred.index(), t, Instant::now());
+            info!("[shred] slot:{}, index:{}, type:{}, now:{:?}", shred.slot(), shred.index(), t, Utc::now().timestamp());
         }
         let num_nodes = match multi_target_send(socket, shred.payload(), &addrs) {
             Ok(()) => addrs.len(),
