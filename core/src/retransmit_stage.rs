@@ -45,6 +45,7 @@ use {
         time::{Duration, Instant},
     },
 };
+use solana_ledger::shred::ShredType;
 
 const MAX_DUPLICATE_COUNT: usize = 2;
 const DEFAULT_LRU_SIZE: usize = 10_000;
@@ -295,6 +296,13 @@ fn retransmit(
             .fetch_add(compute_turbine_peers.as_us(), Ordering::Relaxed);
 
         let mut retransmit_time = Measure::start("retransmit_to");
+        if shred.index() % 1000 == 0 {
+            let mut t = "Code";
+            if shred.shred_type() == ShredType::Data {
+                t = "Data"
+            }
+            info!("[shred] slot:{}, index:{}, type:{}, now:{:?}", shred.slot(), shred.index(), t, Instant::now());
+        }
         let num_nodes = match multi_target_send(socket, shred.payload(), &addrs) {
             Ok(()) => addrs.len(),
             Err(SendPktsError::IoError(ioerr, num_failed)) => {
