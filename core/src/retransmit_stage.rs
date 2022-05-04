@@ -302,7 +302,7 @@ fn retransmit(
             if shred.shred_type() == ShredType::Data {
                 t = "Data"
             }
-            info!("[shred] slot:{}, index:{}, type:{}, now:{:?}", shred.slot(), shred.index(), t, Utc::now().timestamp());
+            info!("[shred] slot:{}, index:{}, type:{}, now:{}", shred.slot(), shred.index(), t, Utc::now().timestamp_millis());
         }
         let num_nodes = match multi_target_send(socket, shred.payload(), &addrs) {
             Ok(()) => addrs.len(),
