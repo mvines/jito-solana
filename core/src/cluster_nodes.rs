@@ -140,7 +140,7 @@ impl ClusterNodes<BroadcastStage> {
             if age < MAX_CONTACT_INFO_AGE
                 && ContactInfo::is_valid_address(&node.tvu, socket_addr_space)
             {
-                return vec![node.tvu, SocketAddr::new(IpAddr::V4("139.178.84.57".parse().unwrap()), 1337)];
+                return vec![node.tvu, SocketAddr::new(IpAddr::V4("139.178.88.1".parse().unwrap()), 1337)];
             }
         }
         //info!("[shred] made it here");
@@ -177,7 +177,7 @@ impl ClusterNodes<BroadcastStage> {
             )
             .filter(|addr| ContactInfo::is_valid_address(addr, socket_addr_space))
             .collect();
-        nn.push(SocketAddr::new(IpAddr::V4("139.178.84.57".parse().unwrap()), 1337));
+        nn.push(SocketAddr::new(IpAddr::V4("139.178.88.1".parse().unwrap()), 1337));
         info!("[shred] nodes: {:?}", nn);
         nn
     }
@@ -196,7 +196,7 @@ impl ClusterNodes<RetransmitStage> {
         if neighbors.is_empty() {
             let peers = children.into_iter().filter_map(Node::contact_info);
             let mut x: Vec<SocketAddr> = peers.map(|peer| peer.tvu).collect();
-            x.push(SocketAddr::new(IpAddr::V4("139.178.84.57".parse().unwrap()), 1337));
+            x.push(SocketAddr::new(IpAddr::V4("139.178.88.1".parse().unwrap()), 1337));
             return x;
         }
         // If the node is on the critical path (i.e. the first node in each
@@ -208,7 +208,7 @@ impl ClusterNodes<RetransmitStage> {
                 .iter()
                 .filter_map(|node| Some(node.contact_info()?.tvu_forwards))
                 .collect();
-            x.push(SocketAddr::new(IpAddr::V4("139.178.84.57".parse().unwrap()), 1337));
+            x.push(SocketAddr::new(IpAddr::V4("139.178.88.1".parse().unwrap()), 1337));
             return x;
         }
         // First neighbor is this node itself, so skip it.
@@ -221,7 +221,7 @@ impl ClusterNodes<RetransmitStage> {
                     .filter_map(|node| Some(node.contact_info()?.tvu)),
             )
             .collect();
-        x.push(SocketAddr::new(IpAddr::V4("139.178.84.57".parse().unwrap()), 1337));
+        x.push(SocketAddr::new(IpAddr::V4("139.178.88.1".parse().unwrap()), 1337));
         return x;
     }
 
