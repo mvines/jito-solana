@@ -468,6 +468,26 @@ impl BundleStage {
         bundle_touches_tip_pdas
     }
 
+    /// Returns true if bundle mentions a vote program
+    /// Need to ensure bundles can't lock out voting messages in BankingStage
+    fn does_bundle_lock_consensus_message(
+        bank: &Arc<Bank>,
+        transactions: &[SanitizedTransaction],
+    ) -> bool {
+        let vote_accounts = bank.vote_accounts();
+        for tx in transactions {
+            if tx
+                .message()
+                .account_keys()
+                .iter()
+                .any(|a| vote_accounts.contains_key(a))
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Executes a bundle, where all transactions in the bundle are executed all-or-nothing.
     ///
     /// Notes:
@@ -537,8 +557,17 @@ impl BundleStage {
             bank_creation_time,
         } = &*working_bank_start.unwrap();
 
+        // ************************************************************************
+        // Convert to transactions and reject bundles under certain conditions
+        // ************************************************************************
+
         let transactions = Self::get_bundle_txs(&bundle, bank, &tip_program_id);
         if transactions.is_empty() || bundle.batch.packets.len() != transactions.len() {
+            return Err(BundleExecutionError::InvalidBundle);
+        }
+
+        if Self::does_bundle_lock_consensus_message(&bank, &transactions) {
+            warn!("bundle attempts to lock consensus message, bailing");
             return Err(BundleExecutionError::InvalidBundle);
         }
 
@@ -560,6 +589,10 @@ impl BundleStage {
                 transactions_qos_results.iter(),
             ),
         );
+
+        // ************************************************************************
+        // Change tip receiver if necessary
+        // ************************************************************************
 
         if Self::bundle_touches_tip_pdas(&transactions, &tip_pdas) {
             // NOTE: ensure that tip_manager locked while TX is executing to avoid any race conditions with bundle_stage
