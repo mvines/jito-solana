@@ -474,6 +474,7 @@ impl BundleStage {
         bank: &Arc<Bank>,
         transactions: &[SanitizedTransaction],
     ) -> bool {
+        // TODO (LB): do we need to lock the authorized voters and node_keypair pubkey too?
         let vote_accounts = bank.vote_accounts();
         for tx in transactions {
             if tx
