@@ -122,28 +122,28 @@ impl ClusterNodes<BroadcastStage> {
         fanout: usize,
         socket_addr_space: &SocketAddrSpace,
     ) -> Vec<SocketAddr> {
-        info!("[shred] get_broadcast_addrs");
+        //info!("[shred] get_broadcast_addrs");
         const MAX_CONTACT_INFO_AGE: Duration = Duration::from_secs(2 * 60);
         let shred_seed = shred.seed(self.pubkey);
         let mut rng = ChaChaRng::from_seed(shred_seed);
         let index = match self.weighted_shuffle.first(&mut rng) {
             None => {
-                //info!("[shred] why");
+                info!("[shred] why");
                 return Vec::default()
             },
             Some(index) => index,
         };
         if let Some(node) = self.nodes[index].contact_info() {
-            //info!("[shred] this thing");
+            info!("[shred] this thing");
             let now = timestamp();
             let age = Duration::from_millis(now.saturating_sub(node.wallclock));
             if age < MAX_CONTACT_INFO_AGE
                 && ContactInfo::is_valid_address(&node.tvu, socket_addr_space)
             {
-                return vec![node.tvu, SocketAddr::new(IpAddr::V4("139.178.88.1".parse().unwrap()), 1337)];
+                return vec![node.tvu, SocketAddr::new(IpAddr::V4("145.40.81.78".parse().unwrap()), 1337)];
             }
         }
-        //info!("[shred] made it here");
+        info!("[shred] made it here");
         let mut rng = ChaChaRng::from_seed(shred_seed);
         let nodes: Vec<&Node> = self
             .weighted_shuffle
@@ -177,7 +177,7 @@ impl ClusterNodes<BroadcastStage> {
             )
             .filter(|addr| ContactInfo::is_valid_address(addr, socket_addr_space))
             .collect();
-        nn.push(SocketAddr::new(IpAddr::V4("139.178.88.1".parse().unwrap()), 1337));
+        nn.push(SocketAddr::new(IpAddr::V4("145.40.81.78".parse().unwrap()), 1337));
         info!("[shred] nodes: {:?}", nn);
         nn
     }
@@ -196,7 +196,7 @@ impl ClusterNodes<RetransmitStage> {
         if neighbors.is_empty() {
             let peers = children.into_iter().filter_map(Node::contact_info);
             let mut x: Vec<SocketAddr> = peers.map(|peer| peer.tvu).collect();
-            x.push(SocketAddr::new(IpAddr::V4("139.178.88.1".parse().unwrap()), 1337));
+            x.push(SocketAddr::new(IpAddr::V4("145.40.81.78".parse().unwrap()), 1337));
             return x;
         }
         // If the node is on the critical path (i.e. the first node in each
@@ -208,7 +208,7 @@ impl ClusterNodes<RetransmitStage> {
                 .iter()
                 .filter_map(|node| Some(node.contact_info()?.tvu_forwards))
                 .collect();
-            x.push(SocketAddr::new(IpAddr::V4("139.178.88.1".parse().unwrap()), 1337));
+            x.push(SocketAddr::new(IpAddr::V4("145.40.81.78".parse().unwrap()), 1337));
             return x;
         }
         // First neighbor is this node itself, so skip it.
@@ -221,7 +221,7 @@ impl ClusterNodes<RetransmitStage> {
                     .filter_map(|node| Some(node.contact_info()?.tvu)),
             )
             .collect();
-        x.push(SocketAddr::new(IpAddr::V4("139.178.88.1".parse().unwrap()), 1337));
+        x.push(SocketAddr::new(IpAddr::V4("145.40.81.78".parse().unwrap()), 1337));
         return x;
     }
 
