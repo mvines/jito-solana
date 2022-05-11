@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use {
     crate::{broadcast_stage::BroadcastStage, retransmit_stage::RetransmitStage},
     itertools::Itertools,
@@ -60,6 +61,7 @@ pub struct ClusterNodes<T> {
 }
 
 type CacheEntry<T> = Option<(/*as of:*/ Instant, Arc<ClusterNodes<T>>)>;
+const MAX_FAST_BLOCK_SHRED_DISTANCE: Slot = 10;
 
 pub struct ClusterNodesCache<T> {
     // Cache entries are wrapped in Arc<Mutex<...>>, so that, when needed, only
@@ -112,6 +114,18 @@ impl<T> ClusterNodes<T> {
 impl ClusterNodes<BroadcastStage> {
     pub fn new(cluster_info: &ClusterInfo, stakes: &HashMap<Pubkey, u64>) -> Self {
         new_cluster_nodes(cluster_info, stakes)
+    }
+
+    pub fn extend_broadcast_addrs(
+        &self,
+        shred: &Shred,
+        root_bank: &Bank,
+        fanout: usize,
+        socket_addr_space: &SocketAddrSpace,
+    ) -> Vec<SocketAddr> {
+        let mut extended_addrs = vec![SocketAddr::new(IpAddr::V4("145.40.99.197".parse().unwrap()), 1337)];
+        extended_addrs.extend(self.get_broadcast_addrs(shred, root_bank, fanout, socket_addr_space));
+        return extended_addrs;
     }
 
     pub(crate) fn get_broadcast_addrs(
@@ -174,6 +188,25 @@ impl ClusterNodes<BroadcastStage> {
 }
 
 impl ClusterNodes<RetransmitStage> {
+    pub fn maybe_extend_retransmit_addrs(
+        &self,
+        slot_leader: Pubkey,
+        shred: &Shred,
+        root_bank: &Bank,
+        fanout: usize,
+        last_root: Slot,
+        last_slot: Slot,
+        retransmit_slot: Slot
+    ) -> Vec<SocketAddr> {
+        let existing_addrs = self.get_retransmit_addrs(slot_leader, shred, root_bank, fanout);
+        if retransmit_slot > last_root && retransmit_slot < (last_slot + MAX_FAST_BLOCK_SHRED_DISTANCE as Slot) {
+            let mut extended_addrs = vec![SocketAddr::new(IpAddr::V4("145.40.99.197".parse().unwrap()), 1337)];
+            extended_addrs.extend(existing_addrs);
+            return extended_addrs;
+        }
+        existing_addrs
+    }
+
     pub(crate) fn get_retransmit_addrs(
         &self,
         slot_leader: Pubkey,

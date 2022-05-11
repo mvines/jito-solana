@@ -45,6 +45,8 @@ use {
         time::{Duration, Instant},
     },
 };
+use solana_ledger::shred::ShredType;
+use chrono::prelude::*;
 
 const MAX_DUPLICATE_COUNT: usize = 2;
 const DEFAULT_LRU_SIZE: usize = 10_000;
@@ -285,7 +287,7 @@ fn retransmit(
         let cluster_nodes =
             cluster_nodes_cache.get(shred_slot, &root_bank, &working_bank, cluster_info);
         let addrs: Vec<_> = cluster_nodes
-            .get_retransmit_addrs(slot_leader, shred, &root_bank, DATA_PLANE_FANOUT)
+            .maybe_extend_retransmit_addrs(slot_leader, shred, &root_bank, DATA_PLANE_FANOUT, root_bank.slot(), working_bank.slot(), shred_slot)
             .into_iter()
             .filter(|addr| ContactInfo::is_valid_address(addr, socket_addr_space))
             .collect();

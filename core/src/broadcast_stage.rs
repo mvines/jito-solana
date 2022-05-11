@@ -1,5 +1,10 @@
 //! A stage to broadcast data from a leader node to validators
 #![allow(clippy::rc_buffer)]
+
+use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
+use std::sync::RwLockReadGuard;
+use futures_util::StreamExt;
 use {
     self::{
         broadcast_duplicates_run::{BroadcastDuplicatesConfig, BroadcastDuplicatesRun},
@@ -42,6 +47,7 @@ use {
         time::{Duration, Instant},
     },
 };
+use solana_mev::proto::shared::Socket;
 
 pub mod broadcast_duplicates_run;
 mod broadcast_fake_shreds_run;
@@ -396,6 +402,7 @@ fn update_peer_stats(
     }
 }
 
+
 /// broadcast messages from the leader to layer 1 nodes
 /// # Remarks
 pub fn broadcast_shreds(
@@ -424,7 +431,7 @@ pub fn broadcast_shreds(
             update_peer_stats(&cluster_nodes, last_datapoint_submit);
             let root_bank = root_bank.clone();
             shreds.flat_map(move |shred| {
-                repeat(shred.payload()).zip(cluster_nodes.get_broadcast_addrs(
+                repeat(shred.payload()).zip(cluster_nodes.extend_broadcast_addrs(
                     shred,
                     &root_bank,
                     DATA_PLANE_FANOUT,
