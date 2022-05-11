@@ -43,8 +43,8 @@ impl ShredFetchStage {
     {
         p.meta.set_discard(true);
         if let Some((slot, _index, _shred_type)) = get_shred_slot_index_type(p, stats) {
-            // Seems reasonable to limit shreds to 2 epochs away
-            if slot > last_root && slot < (last_slot + 2 * slots_per_epoch) {
+            // Seems reasonable to limit shreds to 10 slots away
+            if slot > last_root && slot < (last_slot + 10) {
                 // Shred filter
 
                 let hash = packet_hasher.hash_packet(p);
