@@ -21,7 +21,7 @@ use {
     },
 };
 
-const DEFAULT_LRU_SIZE: usize = 10_000;
+const DEFAULT_LRU_SIZE: usize = 100_000;
 pub type ShredsReceived = LruCache<u64, ()>;
 
 pub struct ShredFetchStage {
@@ -85,7 +85,7 @@ impl ShredFetchStage {
         let mut packet_hasher = PacketHasher::default();
 
         while let Some(mut packet_batch) = recvr.iter().next() {
-            if last_updated.elapsed().as_millis() as u64 > DEFAULT_MS_PER_SLOT {
+            if last_updated.elapsed().as_millis() as u64 > DEFAULT_MS_PER_SLOT * 10 {
                 last_updated = Instant::now();
                 packet_hasher.reset();
                 shreds_received.clear();
