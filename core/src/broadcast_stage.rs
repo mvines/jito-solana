@@ -1,10 +1,6 @@
 //! A stage to broadcast data from a leader node to validators
 #![allow(clippy::rc_buffer)]
 
-use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
-use std::sync::RwLockReadGuard;
-use futures_util::StreamExt;
 use {
     self::{
         broadcast_duplicates_run::{BroadcastDuplicatesConfig, BroadcastDuplicatesRun},
@@ -47,7 +43,6 @@ use {
         time::{Duration, Instant},
     },
 };
-use solana_mev::proto::shared::Socket;
 
 pub mod broadcast_duplicates_run;
 mod broadcast_fake_shreds_run;
@@ -90,6 +85,7 @@ impl BroadcastStageType {
         blockstore: &Arc<Blockstore>,
         bank_forks: &Arc<RwLock<BankForks>>,
         shred_version: u16,
+        shred_receiver_addr: String,
     ) -> BroadcastStage {
         match self {
             BroadcastStageType::Standard => BroadcastStage::new(
@@ -101,6 +97,7 @@ impl BroadcastStageType {
                 blockstore,
                 bank_forks,
                 StandardBroadcastRun::new(shred_version),
+                shred_receiver_addr,
             ),
 
             BroadcastStageType::FailEntryVerification => BroadcastStage::new(
@@ -112,6 +109,7 @@ impl BroadcastStageType {
                 blockstore,
                 bank_forks,
                 FailEntryVerificationBroadcastRun::new(shred_version),
+                shred_receiver_addr,
             ),
 
             BroadcastStageType::BroadcastFakeShreds => BroadcastStage::new(
@@ -123,6 +121,7 @@ impl BroadcastStageType {
                 blockstore,
                 bank_forks,
                 BroadcastFakeShredsRun::new(0, shred_version),
+                shred_receiver_addr,
             ),
 
             BroadcastStageType::BroadcastDuplicates(config) => BroadcastStage::new(
@@ -134,6 +133,7 @@ impl BroadcastStageType {
                 blockstore,
                 bank_forks,
                 BroadcastDuplicatesRun::new(shred_version, config.clone()),
+                shred_receiver_addr,
             ),
         }
     }
@@ -154,6 +154,7 @@ trait BroadcastRun {
         cluster_info: &ClusterInfo,
         sock: &UdpSocket,
         bank_forks: &Arc<RwLock<BankForks>>,
+        shred_receiver_service: &str,
     ) -> Result<()>;
     fn record(
         &mut self,
@@ -253,6 +254,7 @@ impl BroadcastStage {
         blockstore: &Arc<Blockstore>,
         bank_forks: &Arc<RwLock<BankForks>>,
         broadcast_stage_run: impl BroadcastRun + Send + 'static + Clone,
+        shred_receiver_addr: String,
     ) -> Self {
         let btree = blockstore.clone();
         let exit = exit_sender.clone();
@@ -285,11 +287,17 @@ impl BroadcastStage {
             let mut bs_transmit = broadcast_stage_run.clone();
             let cluster_info = cluster_info.clone();
             let bank_forks = bank_forks.clone();
+            let shred_receiver_addr = shred_receiver_addr.clone();
             let t = Builder::new()
                 .name("solana-broadcaster-transmit".to_string())
                 .spawn(move || loop {
-                    let res =
-                        bs_transmit.transmit(&socket_receiver, &cluster_info, &sock, &bank_forks);
+                    let res = bs_transmit.transmit(
+                        &socket_receiver,
+                        &cluster_info,
+                        &sock,
+                        &bank_forks,
+                        &shred_receiver_addr,
+                    );
                     let res = Self::handle_error(res, "solana-broadcaster-transmit");
                     if let Some(res) = res {
                         return res;
@@ -402,7 +410,6 @@ fn update_peer_stats(
     }
 }
 
-
 /// broadcast messages from the leader to layer 1 nodes
 /// # Remarks
 pub fn broadcast_shreds(
@@ -414,6 +421,7 @@ pub fn broadcast_shreds(
     cluster_info: &ClusterInfo,
     bank_forks: &Arc<RwLock<BankForks>>,
     socket_addr_space: &SocketAddrSpace,
+    shred_receiver_addr: &str,
 ) -> Result<()> {
     let mut result = Ok(());
     let mut shred_select = Measure::start("shred_select");
@@ -431,11 +439,12 @@ pub fn broadcast_shreds(
             update_peer_stats(&cluster_nodes, last_datapoint_submit);
             let root_bank = root_bank.clone();
             shreds.flat_map(move |shred| {
-                repeat(shred.payload()).zip(cluster_nodes.extend_broadcast_addrs(
+                repeat(shred.payload()).zip(cluster_nodes.maybe_extend_broadcast_addrs(
                     shred,
                     &root_bank,
                     DATA_PLANE_FANOUT,
                     socket_addr_space,
+                    shred_receiver_addr,
                 ))
             })
         })
@@ -634,6 +643,7 @@ pub mod test {
             &blockstore,
             &bank_forks,
             StandardBroadcastRun::new(0),
+            "",
         );
 
         MockBroadcastStage {

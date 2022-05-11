@@ -45,8 +45,6 @@ use {
         time::{Duration, Instant},
     },
 };
-use solana_ledger::shred::ShredType;
-use chrono::prelude::*;
 
 const MAX_DUPLICATE_COUNT: usize = 2;
 const DEFAULT_LRU_SIZE: usize = 10_000;
@@ -228,6 +226,7 @@ fn retransmit(
     max_slots: &MaxSlots,
     first_shreds_received: &Mutex<BTreeSet<Slot>>,
     rpc_subscriptions: Option<&RpcSubscriptions>,
+    shred_receiver_addr: &str,
 ) -> Result<(), RecvTimeoutError> {
     const RECV_TIMEOUT: Duration = Duration::from_secs(1);
     let mut shreds = shreds_receiver.recv_timeout(RECV_TIMEOUT)?;
@@ -287,7 +286,16 @@ fn retransmit(
         let cluster_nodes =
             cluster_nodes_cache.get(shred_slot, &root_bank, &working_bank, cluster_info);
         let addrs: Vec<_> = cluster_nodes
-            .maybe_extend_retransmit_addrs(slot_leader, shred, &root_bank, DATA_PLANE_FANOUT, root_bank.slot(), working_bank.slot(), shred_slot)
+            .maybe_extend_retransmit_addrs(
+                slot_leader,
+                shred,
+                &root_bank,
+                DATA_PLANE_FANOUT,
+                root_bank.slot(),
+                working_bank.slot(),
+                shred_slot,
+                shred_receiver_addr,
+            )
             .into_iter()
             .filter(|addr| ContactInfo::is_valid_address(addr, socket_addr_space))
             .collect();
@@ -376,6 +384,7 @@ pub fn retransmitter(
     shreds_receiver: Receiver<Vec<Shred>>,
     max_slots: Arc<MaxSlots>,
     rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
+    shred_receiver_addr: String,
 ) -> JoinHandle<()> {
     let cluster_nodes_cache = ClusterNodesCache::<RetransmitStage>::new(
         CLUSTER_NODES_CACHE_NUM_EPOCH_CAP,
@@ -410,6 +419,7 @@ pub fn retransmitter(
                     &max_slots,
                     &first_shreds_received,
                     rpc_subscriptions.as_deref(),
+                    &shred_receiver_addr,
                 ) {
                     Ok(()) => (),
                     Err(RecvTimeoutError::Timeout) => (),
@@ -453,6 +463,7 @@ impl RetransmitStage {
         rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
         duplicate_slots_sender: Sender<Slot>,
         ancestor_hashes_replay_update_receiver: AncestorHashesReplayUpdateReceiver,
+        shred_receiver_addr: String,
     ) -> Self {
         let (retransmit_sender, retransmit_receiver) = unbounded();
 
@@ -464,6 +475,7 @@ impl RetransmitStage {
             retransmit_receiver,
             max_slots,
             rpc_subscriptions,
+            shred_receiver_addr,
         );
 
         let cluster_slots_service = ClusterSlotsService::new(

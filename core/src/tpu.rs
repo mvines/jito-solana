@@ -99,6 +99,7 @@ impl Tpu {
         keypair: &Keypair,
         validator_interface_address: String,
         tip_program_pubkey: Pubkey,
+        shred_receiver_address: String,
     ) -> Self {
         let TpuSockets {
             transactions: transactions_sockets,
@@ -251,6 +252,7 @@ impl Tpu {
             blockstore,
             &bank_forks,
             shred_version,
+            shred_receiver_address,
         );
 
         Self {

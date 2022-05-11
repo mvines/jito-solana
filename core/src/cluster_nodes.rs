@@ -1,4 +1,3 @@
-use std::net::IpAddr;
 use {
     crate::{broadcast_stage::BroadcastStage, retransmit_stage::RetransmitStage},
     itertools::Itertools,
@@ -31,6 +30,7 @@ use {
         marker::PhantomData,
         net::SocketAddr,
         ops::Deref,
+        str::FromStr,
         sync::{Arc, Mutex},
         time::{Duration, Instant},
     },
@@ -116,16 +116,20 @@ impl ClusterNodes<BroadcastStage> {
         new_cluster_nodes(cluster_info, stakes)
     }
 
-    pub fn extend_broadcast_addrs(
+    pub fn maybe_extend_broadcast_addrs(
         &self,
         shred: &Shred,
         root_bank: &Bank,
         fanout: usize,
         socket_addr_space: &SocketAddrSpace,
+        shred_receiver_addr: &str,
     ) -> Vec<SocketAddr> {
-        let mut extended_addrs = vec![SocketAddr::new(IpAddr::V4("145.40.99.197".parse().unwrap()), 1337)];
-        extended_addrs.extend(self.get_broadcast_addrs(shred, root_bank, fanout, socket_addr_space));
-        return extended_addrs;
+        let mut broadcast_addrs =
+            self.get_broadcast_addrs(shred, root_bank, fanout, socket_addr_space);
+        if let Ok(extended_addr) = SocketAddr::from_str(shred_receiver_addr) {
+            broadcast_addrs.extend(vec![extended_addr]);
+        }
+        broadcast_addrs
     }
 
     pub(crate) fn get_broadcast_addrs(
@@ -196,13 +200,17 @@ impl ClusterNodes<RetransmitStage> {
         fanout: usize,
         last_root: Slot,
         last_slot: Slot,
-        retransmit_slot: Slot
+        retransmit_slot: Slot,
+        shred_receiver_addr: &str,
     ) -> Vec<SocketAddr> {
-        let existing_addrs = self.get_retransmit_addrs(slot_leader, shred, root_bank, fanout);
-        if retransmit_slot > last_root && retransmit_slot < (last_slot + MAX_FAST_BLOCK_SHRED_DISTANCE as Slot) {
-            let mut extended_addrs = vec![SocketAddr::new(IpAddr::V4("145.40.99.197".parse().unwrap()), 1337)];
-            extended_addrs.extend(existing_addrs);
-            return extended_addrs;
+        let mut existing_addrs = self.get_retransmit_addrs(slot_leader, shred, root_bank, fanout);
+        // This was measured empirically to reduce duplicate packets at the backend by ~3x for 3 participating validators
+        if retransmit_slot > last_root
+            && retransmit_slot < (last_slot + MAX_FAST_BLOCK_SHRED_DISTANCE as Slot)
+        {
+            if let Ok(addr) = SocketAddr::from_str(shred_receiver_addr) {
+                existing_addrs.extend(vec![addr]);
+            }
         }
         existing_addrs
     }
