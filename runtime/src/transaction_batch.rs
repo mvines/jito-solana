@@ -27,6 +27,20 @@ impl<'a, 'b> TransactionBatch<'a, 'b> {
         }
     }
 
+    pub fn new_other(
+        lock_results: Vec<Result<()>>,
+        bank: &'a Bank,
+        sanitized_txs: Cow<'b, [&'b SanitizedTransaction]>,
+    ) -> Self {
+        assert_eq!(lock_results.len(), sanitized_txs.len());
+        Self {
+            lock_results,
+            bank,
+            sanitized_txs,
+            needs_unlock: true,
+        }
+    }
+
     pub fn lock_results(&self) -> &Vec<Result<()>> {
         &self.lock_results
     }

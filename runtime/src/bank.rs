@@ -3858,12 +3858,16 @@ impl Bank {
         transactions: Vec<&'b SanitizedTransaction>,
     ) -> TransactionBatch<'a, 'b> {
         // this lock_results could be: Ok, AccountInUse, BundleNotContinuous, AccountLoadedTwice, or TooManyAccountLocks
+        let txs = transactions
+            .into_iter()
+            .map(|t| t)
+            .collect::<Vec<SanitizedTransaction>>();
         let lock_results = self
             .rc
             .accounts
-            .lock_accounts_sequential_with_results(transactions.iter(), &self.feature_set);
-        let txs = transactions.into_iter().map(|&t| t).collect();
-        TransactionBatch::new(lock_results, self, transactions)
+            .lock_accounts_sequential_with_results(txs.iter(), &self.feature_set);
+
+        TransactionBatch::new(lock_results, self, Cow::Borrowed(&txs))
     }
 
     /// Prepare a transaction batch without locking accounts for transaction simulation.

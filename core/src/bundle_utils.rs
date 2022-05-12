@@ -13,7 +13,7 @@ use {
 
 pub struct LockedBundle<'a, 'b> {
     bank: &'b Arc<Bank>,
-    sanitized_txs: Cow<'a, [SanitizedTransaction]>,
+    sanitized_txs: Vec<&'a SanitizedTransaction>,
     chunk_start: usize,
     chunk_end: usize,
 }
@@ -21,7 +21,7 @@ pub struct LockedBundle<'a, 'b> {
 impl<'a, 'b> LockedBundle<'a, 'b> {
     pub fn new(
         bank: &'b Arc<Bank>,
-        sanitized_txs: Cow<'a, [SanitizedTransaction]>,
+        sanitized_txs: Vec<&'a SanitizedTransaction>,
     ) -> LockedBundle<'a, 'b> {
         let chunk_start = 0;
         let chunk_end = std::cmp::min(sanitized_txs.len(), chunk_start + 128);
@@ -33,20 +33,16 @@ impl<'a, 'b> LockedBundle<'a, 'b> {
             chunk_end,
         }
     }
-
-    fn chunk(&'a self) -> Cow<'a, [SanitizedTransaction]> {
-        Cow::Borrowed(&self.sanitized_txs[self.chunk_start..self.chunk_end])
-    }
 }
 
 impl<'a, 'b> Iterator for LockedBundle<'a, 'b> {
     type Item = TransactionBatch<'a, 'b>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let chunk = self.chunk();
+        let chunk = self.sanitized_txs[self.chunk_start..self.chunk_end];
         let tx_batch = self
             .bank
-            .prepare_sequential_sanitized_batch_with_results(chunk);
+            .prepare_sequential_sanitized_batch_with_results(chunk.to_vec());
 
         // start at the next available transaction in the batch that threw an error
         let processing_end = tx_batch.lock_results().iter().position(|res| res.is_err());
