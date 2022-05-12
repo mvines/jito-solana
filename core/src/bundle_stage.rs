@@ -7,7 +7,6 @@ use {
         bundle_utils::{get_bundle_txs, LockedBundle},
         leader_slot_banking_stage_timing_metrics::LeaderExecuteAndCommitTimings,
         qos_service::{CommitTransactionDetails, QosService},
-        unprocessed_packet_batches::{self, *},
     },
     crossbeam_channel::{Receiver, RecvTimeoutError},
     solana_entry::entry::hash_transactions,
@@ -17,7 +16,6 @@ use {
         bundle::Bundle,
         tip_manager::{TipManager, TipPaymentError},
     },
-    solana_perf::{cuda_runtime::PinnedVec, packet::Packet},
     solana_poh::poh_recorder::{
         BankStart, PohRecorder,
         PohRecorderError::{self},
@@ -44,7 +42,7 @@ use {
         signature::{Keypair, Signer},
         system_instruction,
         transaction::{
-            self, AddressLoader, MessageHash, SanitizedTransaction, Transaction, TransactionError,
+            self, MessageHash, SanitizedTransaction, Transaction, TransactionError,
             VersionedTransaction,
         },
     },
@@ -358,7 +356,7 @@ impl BundleStage {
             )?;
         }
 
-        let mut locked_bundle_iter = LockedBundle::new(bank.clone(), transactions);
+        let mut locked_bundle_iter = LockedBundle::new(&bank, Cow::Borrowed(&transactions));
         while let Some(batch) = locked_bundle_iter.next() {
             if !Bank::should_bank_still_be_processing_txs(bank_creation_time, bank.ns_per_slot) {
                 QosService::remove_transaction_costs(
@@ -432,7 +430,7 @@ impl BundleStage {
             // *********************************************************************************
             Self::cache_accounts(
                 bank,
-                &batch.sanitized_transactions(),
+                batch.sanitized_transactions(),
                 &load_and_execute_transactions_output.execution_results,
                 &mut load_and_execute_transactions_output.loaded_transactions,
                 &mut account_override,

@@ -3855,14 +3855,15 @@ impl Bank {
     /// limited packing status, where transactions will be locked sequentially until the first failure
     pub fn prepare_sequential_sanitized_batch_with_results<'a, 'b>(
         &'a self,
-        transactions: &'b [SanitizedTransaction],
+        transactions: Vec<&'b SanitizedTransaction>,
     ) -> TransactionBatch<'a, 'b> {
         // this lock_results could be: Ok, AccountInUse, BundleNotContinuous, AccountLoadedTwice, or TooManyAccountLocks
         let lock_results = self
             .rc
             .accounts
             .lock_accounts_sequential_with_results(transactions.iter(), &self.feature_set);
-        TransactionBatch::new(lock_results, self, Cow::Borrowed(transactions))
+        let txs = transactions.into_iter().map(|&t| t).collect();
+        TransactionBatch::new(lock_results, self, transactions)
     }
 
     /// Prepare a transaction batch without locking accounts for transaction simulation.

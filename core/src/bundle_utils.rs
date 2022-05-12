@@ -8,18 +8,21 @@ use {
         pubkey::Pubkey,
         transaction::{AddressLoader, SanitizedTransaction},
     },
-    std::sync::Arc,
+    std::{borrow::Cow, sync::Arc},
 };
 
-pub struct LockedBundle {
-    bank: Arc<Bank>,
-    sanitized_txs: Vec<SanitizedTransaction>,
+pub struct LockedBundle<'a, 'b> {
+    bank: &'b Arc<Bank>,
+    sanitized_txs: Cow<'a, [SanitizedTransaction]>,
     chunk_start: usize,
     chunk_end: usize,
 }
 
-impl LockedBundle {
-    pub fn new(bank: Arc<Bank>, sanitized_txs: Vec<SanitizedTransaction>) -> LockedBundle {
+impl<'a, 'b> LockedBundle<'a, 'b> {
+    pub fn new(
+        bank: &'b Arc<Bank>,
+        sanitized_txs: Cow<'a, [SanitizedTransaction]>,
+    ) -> LockedBundle<'a, 'b> {
         let chunk_start = 0;
         let chunk_end = std::cmp::min(sanitized_txs.len(), chunk_start + 128);
 
@@ -30,13 +33,17 @@ impl LockedBundle {
             chunk_end,
         }
     }
+
+    fn chunk(&'a self) -> Cow<'a, [SanitizedTransaction]> {
+        Cow::Borrowed(&self.sanitized_txs[self.chunk_start..self.chunk_end])
+    }
 }
 
-impl<'a, 'b> Iterator for LockedBundle {
+impl<'a, 'b> Iterator for LockedBundle<'a, 'b> {
     type Item = TransactionBatch<'a, 'b>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let chunk = &self.sanitized_txs[self.chunk_start..self.chunk_end];
+        let chunk = self.chunk();
         let tx_batch = self
             .bank
             .prepare_sequential_sanitized_batch_with_results(chunk);
