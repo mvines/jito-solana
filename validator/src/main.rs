@@ -2549,7 +2549,6 @@ pub fn main() {
         validator_interface_address: value_of(&matches, "validator_interface_address")
             .unwrap_or_default(),
         tip_program_pubkey: value_t!(matches.value_of("tip_program_pubkey"), Pubkey).unwrap(),
-        shred_receiver_address: value_of(&matches, "shred_receiver_address").unwrap_or_default(),
         shred_receiver_address: matches
             .value_of("shred_receiver_address")
             .map(|address| SocketAddr::from_str(address).expect("shred_receiver_address invalid")),
