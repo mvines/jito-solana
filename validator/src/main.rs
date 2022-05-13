@@ -1745,7 +1745,6 @@ pub fn main() {
             Arg::with_name("shred_receiver_address")
                 .long("shred-receiver-address")
                 .value_name("SHRED_RECEIVER_ADDRESS")
-                .required(true)
                 .takes_value(true)
                 .help("Shred receiver listening address")
         )
@@ -2551,6 +2550,9 @@ pub fn main() {
             .unwrap_or_default(),
         tip_program_pubkey: value_t!(matches.value_of("tip_program_pubkey"), Pubkey).unwrap(),
         shred_receiver_address: value_of(&matches, "shred_receiver_address").unwrap_or_default(),
+        shred_receiver_address: matches
+            .value_of("shred_receiver_address")
+            .map(|address| SocketAddr::from_str(address).expect("shred_receiver_address invalid")),
         ..ValidatorConfig::default()
     };
 

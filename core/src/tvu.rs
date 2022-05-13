@@ -50,7 +50,7 @@ use {
     solana_sdk::{clock::Slot, pubkey::Pubkey, signature::Keypair},
     std::{
         collections::HashSet,
-        net::UdpSocket,
+        net::{SocketAddr, UdpSocket},
         sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
         thread,
         time::Duration,
@@ -133,7 +133,7 @@ impl Tvu {
         wait_to_vote_slot: Option<Slot>,
         accounts_background_request_sender: AbsRequestSender,
         use_quic: bool,
-        shred_receiver_addr: String,
+        shred_receiver_addr: Option<SocketAddr>,
     ) -> Self {
         let TvuSockets {
             repair: repair_socket,

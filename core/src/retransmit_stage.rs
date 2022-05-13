@@ -35,7 +35,7 @@ use {
     solana_streamer::sendmmsg::{multi_target_send, SendPktsError},
     std::{
         collections::{BTreeSet, HashMap, HashSet},
-        net::UdpSocket,
+        net::{SocketAddr, UdpSocket},
         ops::{AddAssign, DerefMut},
         sync::{
             atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -226,7 +226,7 @@ fn retransmit(
     max_slots: &MaxSlots,
     first_shreds_received: &Mutex<BTreeSet<Slot>>,
     rpc_subscriptions: Option<&RpcSubscriptions>,
-    shred_receiver_addr: &str,
+    shred_receiver_addr: Option<SocketAddr>,
 ) -> Result<(), RecvTimeoutError> {
     const RECV_TIMEOUT: Duration = Duration::from_secs(1);
     let mut shreds = shreds_receiver.recv_timeout(RECV_TIMEOUT)?;
@@ -291,9 +291,6 @@ fn retransmit(
                 shred,
                 &root_bank,
                 DATA_PLANE_FANOUT,
-                root_bank.slot(),
-                working_bank.slot(),
-                shred_slot,
                 shred_receiver_addr,
             )
             .into_iter()
@@ -384,7 +381,7 @@ pub fn retransmitter(
     shreds_receiver: Receiver<Vec<Shred>>,
     max_slots: Arc<MaxSlots>,
     rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
-    shred_receiver_addr: String,
+    shred_receiver_addr: Option<SocketAddr>,
 ) -> JoinHandle<()> {
     let cluster_nodes_cache = ClusterNodesCache::<RetransmitStage>::new(
         CLUSTER_NODES_CACHE_NUM_EPOCH_CAP,
@@ -419,7 +416,7 @@ pub fn retransmitter(
                     &max_slots,
                     &first_shreds_received,
                     rpc_subscriptions.as_deref(),
-                    &shred_receiver_addr,
+                    shred_receiver_addr,
                 ) {
                     Ok(()) => (),
                     Err(RecvTimeoutError::Timeout) => (),
@@ -463,7 +460,7 @@ impl RetransmitStage {
         rpc_subscriptions: Option<Arc<RpcSubscriptions>>,
         duplicate_slots_sender: Sender<Slot>,
         ancestor_hashes_replay_update_receiver: AncestorHashesReplayUpdateReceiver,
-        shred_receiver_addr: String,
+        shred_receiver_addr: Option<SocketAddr>,
     ) -> Self {
         let (retransmit_sender, retransmit_receiver) = unbounded();
 

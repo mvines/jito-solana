@@ -30,7 +30,6 @@ use {
         marker::PhantomData,
         net::SocketAddr,
         ops::Deref,
-        str::FromStr,
         sync::{Arc, Mutex},
         time::{Duration, Instant},
     },
@@ -61,7 +60,6 @@ pub struct ClusterNodes<T> {
 }
 
 type CacheEntry<T> = Option<(/*as of:*/ Instant, Arc<ClusterNodes<T>>)>;
-const MAX_FAST_BLOCK_SHRED_DISTANCE: Slot = 10;
 
 pub struct ClusterNodesCache<T> {
     // Cache entries are wrapped in Arc<Mutex<...>>, so that, when needed, only
@@ -122,11 +120,11 @@ impl ClusterNodes<BroadcastStage> {
         root_bank: &Bank,
         fanout: usize,
         socket_addr_space: &SocketAddrSpace,
-        shred_receiver_addr: &str,
+        shred_receiver_addr: Option<SocketAddr>,
     ) -> Vec<SocketAddr> {
         let mut broadcast_addrs =
             self.get_broadcast_addrs(shred, root_bank, fanout, socket_addr_space);
-        if let Ok(extended_addr) = SocketAddr::from_str(shred_receiver_addr) {
+        if let Some(extended_addr) = shred_receiver_addr {
             broadcast_addrs.extend(vec![extended_addr]);
         }
         broadcast_addrs
@@ -198,19 +196,11 @@ impl ClusterNodes<RetransmitStage> {
         shred: &Shred,
         root_bank: &Bank,
         fanout: usize,
-        last_root: Slot,
-        last_slot: Slot,
-        retransmit_slot: Slot,
-        shred_receiver_addr: &str,
+        shred_receiver_addr: Option<SocketAddr>,
     ) -> Vec<SocketAddr> {
         let mut existing_addrs = self.get_retransmit_addrs(slot_leader, shred, root_bank, fanout);
-        // This was measured empirically to reduce duplicate packets at the backend by ~3x for 3 participating validators
-        if retransmit_slot > last_root
-            && retransmit_slot < (last_slot + MAX_FAST_BLOCK_SHRED_DISTANCE as Slot)
-        {
-            if let Ok(addr) = SocketAddr::from_str(shred_receiver_addr) {
-                existing_addrs.extend(vec![addr]);
-            }
+        if let Some(address) = shred_receiver_addr {
+            existing_addrs.extend(vec![address]);
         }
         existing_addrs
     }

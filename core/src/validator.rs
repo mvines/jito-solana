@@ -176,7 +176,7 @@ pub struct ValidatorConfig {
     pub runtime_config: RuntimeConfig,
     pub validator_interface_address: String,
     pub tip_program_pubkey: Pubkey,
-    pub shred_receiver_address: String,
+    pub shred_receiver_address: Option<SocketAddr>,
 }
 
 impl Default for ValidatorConfig {
@@ -239,7 +239,7 @@ impl Default for ValidatorConfig {
             runtime_config: RuntimeConfig::default(),
             validator_interface_address: String::new(),
             tip_program_pubkey: Pubkey::default(),
-            shred_receiver_address: String::new(),
+            shred_receiver_address: None,
         }
     }
 }
@@ -355,7 +355,7 @@ pub struct Validator {
     accounts_background_service: AccountsBackgroundService,
     accounts_hash_verifier: AccountsHashVerifier,
     pub validator_interface_address: String,
-    pub shred_receiver_address: String,
+    pub shred_receiver_address: Option<SocketAddr>,
 }
 
 // in the distant future, get rid of ::new()/exit() and use Result properly...
@@ -971,7 +971,7 @@ impl Validator {
             config.wait_to_vote_slot,
             accounts_background_request_sender,
             use_quic,
-            config.shred_receiver_address.clone(),
+            config.shred_receiver_address,
         );
 
         let tpu = Tpu::new(
@@ -1005,7 +1005,7 @@ impl Validator {
             &identity_keypair,
             config.validator_interface_address.clone(),
             config.tip_program_pubkey,
-            config.shred_receiver_address.clone(),
+            config.shred_receiver_address,
         );
 
         datapoint_info!("validator-new", ("id", id.to_string(), String));
@@ -1041,7 +1041,7 @@ impl Validator {
             accounts_background_service,
             accounts_hash_verifier,
             validator_interface_address: config.validator_interface_address.clone(),
-            shred_receiver_address: config.shred_receiver_address.clone(),
+            shred_receiver_address: config.shred_receiver_address,
         }
     }
 

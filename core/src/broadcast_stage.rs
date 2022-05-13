@@ -34,7 +34,7 @@ use {
     std::{
         collections::{HashMap, HashSet},
         iter::repeat,
-        net::UdpSocket,
+        net::{SocketAddr, UdpSocket},
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, Mutex, RwLock,
@@ -85,7 +85,7 @@ impl BroadcastStageType {
         blockstore: &Arc<Blockstore>,
         bank_forks: &Arc<RwLock<BankForks>>,
         shred_version: u16,
-        shred_receiver_addr: String,
+        shred_receiver_addr: Option<SocketAddr>,
     ) -> BroadcastStage {
         match self {
             BroadcastStageType::Standard => BroadcastStage::new(
@@ -109,7 +109,7 @@ impl BroadcastStageType {
                 blockstore,
                 bank_forks,
                 FailEntryVerificationBroadcastRun::new(shred_version),
-                shred_receiver_addr,
+                None,
             ),
 
             BroadcastStageType::BroadcastFakeShreds => BroadcastStage::new(
@@ -121,7 +121,7 @@ impl BroadcastStageType {
                 blockstore,
                 bank_forks,
                 BroadcastFakeShredsRun::new(0, shred_version),
-                shred_receiver_addr,
+                None,
             ),
 
             BroadcastStageType::BroadcastDuplicates(config) => BroadcastStage::new(
@@ -133,7 +133,7 @@ impl BroadcastStageType {
                 blockstore,
                 bank_forks,
                 BroadcastDuplicatesRun::new(shred_version, config.clone()),
-                shred_receiver_addr,
+                None,
             ),
         }
     }
@@ -154,7 +154,7 @@ trait BroadcastRun {
         cluster_info: &ClusterInfo,
         sock: &UdpSocket,
         bank_forks: &Arc<RwLock<BankForks>>,
-        shred_receiver_service: &str,
+        shred_receiver_service: Option<SocketAddr>,
     ) -> Result<()>;
     fn record(
         &mut self,
@@ -254,7 +254,7 @@ impl BroadcastStage {
         blockstore: &Arc<Blockstore>,
         bank_forks: &Arc<RwLock<BankForks>>,
         broadcast_stage_run: impl BroadcastRun + Send + 'static + Clone,
-        shred_receiver_addr: String,
+        shred_receiver_addr: Option<SocketAddr>,
     ) -> Self {
         let btree = blockstore.clone();
         let exit = exit_sender.clone();
@@ -287,7 +287,6 @@ impl BroadcastStage {
             let mut bs_transmit = broadcast_stage_run.clone();
             let cluster_info = cluster_info.clone();
             let bank_forks = bank_forks.clone();
-            let shred_receiver_addr = shred_receiver_addr.clone();
             let t = Builder::new()
                 .name("solana-broadcaster-transmit".to_string())
                 .spawn(move || loop {
@@ -296,7 +295,7 @@ impl BroadcastStage {
                         &cluster_info,
                         &sock,
                         &bank_forks,
-                        &shred_receiver_addr,
+                        shred_receiver_addr,
                     );
                     let res = Self::handle_error(res, "solana-broadcaster-transmit");
                     if let Some(res) = res {
@@ -421,7 +420,7 @@ pub fn broadcast_shreds(
     cluster_info: &ClusterInfo,
     bank_forks: &Arc<RwLock<BankForks>>,
     socket_addr_space: &SocketAddrSpace,
-    shred_receiver_addr: &str,
+    shred_receiver_addr: Option<SocketAddr>,
 ) -> Result<()> {
     let mut result = Ok(());
     let mut shred_select = Measure::start("shred_select");
