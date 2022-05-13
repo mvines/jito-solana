@@ -149,9 +149,8 @@ pub mod zk_token_sdk_enabled {
     solana_sdk::declare_id!("zk1snxsc6Fh3wsGNbbHAJNHiJoYgF29mMnTSusGx5EJ");
 }
 
-// TODO: temporary address for now
 pub mod curve25519_syscall_enabled {
-    solana_sdk::declare_id!("curve25519111111111111111111111111111111111");
+    solana_sdk::declare_id!("7rcw5UtqgDTBBv2EcynNfYckgdAaH1MAsCjKgXMkN7Ri");
 }
 
 pub mod versioned_tx_message_enabled {
@@ -397,6 +396,10 @@ pub mod stake_raise_minimum_delegation_to_1_sol {
     solana_sdk::declare_id!("4xmyBuR2VCXzy9H6qYpH9ckfgnTuMDQFPFBfTs4eBCY1");
 }
 
+pub mod prioritization_fee_type_change {
+    solana_sdk::declare_id!("98std1NSHqXi9WYvFShfVepRdCoq1qvsp8fsR2XZtG8g");
+}
+
 lazy_static! {
     /// Map of feature identifiers to user-visible description
     pub static ref FEATURE_NAMES: HashMap<Pubkey, &'static str> = [
@@ -489,6 +492,7 @@ lazy_static! {
         (stake_allow_zero_undelegated_amount::id(), "Allow zero-lamport undelegated amount for initialized stakes #24670"),
         (require_static_program_ids_in_transaction::id(), "require static program ids in versioned transactions"),
         (stake_raise_minimum_delegation_to_1_sol::id(), "Raise minimum stake delegation to 1.0 SOL #24357"),
+        (prioritization_fee_type_change::id(), "Switch compute budget to prioritization fee"),
         /*************** ADD NEW FEATURES HERE ***************/
     ]
     .iter()

@@ -1757,12 +1757,11 @@ impl BankingStage {
             return None;
         }
 
-        let tx = SanitizedTransaction::try_create(
-            deserialized_packet.versioned_transaction().clone(),
+        let tx = SanitizedTransaction::try_new(
+            deserialized_packet.transaction().clone(),
             *deserialized_packet.message_hash(),
-            Some(deserialized_packet.is_simple_vote()),
+            deserialized_packet.is_simple_vote(),
             address_loader,
-            feature_set.is_active(&feature_set::require_static_program_ids_in_transaction::ID),
         )
         .ok()?;
         tx.verify_precompiles(feature_set).ok()?;
@@ -2014,6 +2013,34 @@ impl BankingStage {
             .collect()
     }
 
+    fn receive_until(
+        verified_receiver: &CrossbeamReceiver<Vec<PacketBatch>>,
+        recv_timeout: Duration,
+        packet_count_upperbound: usize,
+    ) -> Result<Vec<PacketBatch>, RecvTimeoutError> {
+        let start = Instant::now();
+        let mut packet_batches = verified_receiver.recv_timeout(recv_timeout)?;
+        let mut num_packets_received: usize =
+            packet_batches.iter().map(|batch| batch.packets.len()).sum();
+        while let Ok(packet_batch) = verified_receiver.try_recv() {
+            trace!("got more packet batches in banking stage");
+            let (packets_received, packet_count_overflowed) = num_packets_received
+                .overflowing_add(packet_batch.iter().map(|batch| batch.packets.len()).sum());
+            packet_batches.extend(packet_batch);
+
+            // Spend any leftover receive time budget to greedily receive more packet batches,
+            // until the upperbound of the packet count is reached.
+            if start.elapsed() >= recv_timeout
+                || packet_count_overflowed
+                || packets_received >= packet_count_upperbound
+            {
+                break;
+            }
+            num_packets_received = packets_received;
+        }
+        Ok(packet_batches)
+    }
+
     #[allow(clippy::too_many_arguments)]
     /// Receive incoming packets, push into unprocessed buffer with packet indexes
     fn receive_and_buffer_packets(
@@ -2026,7 +2053,11 @@ impl BankingStage {
         slot_metrics_tracker: &mut LeaderSlotMetricsTracker,
     ) -> Result<(), RecvTimeoutError> {
         let mut recv_time = Measure::start("receive_and_buffer_packets_recv");
-        let packet_batches = verified_receiver.recv_timeout(recv_timeout)?;
+        let packet_batches = Self::receive_until(
+            verified_receiver,
+            recv_timeout,
+            buffered_packet_batches.capacity() - buffered_packet_batches.len(),
+        )?;
         recv_time.stop();
 
         let packet_batches_len = packet_batches.len();
@@ -2559,8 +2590,8 @@ mod tests {
                 );
 
                 // wait for banking_stage to eat the packets
-                while bank.get_balance(&alice.pubkey()) < 2 {
-                    sleep(Duration::from_millis(100));
+                while bank.get_balance(&alice.pubkey()) < 1 {
+                    sleep(Duration::from_millis(10));
                 }
                 exit.store(true, Ordering::Relaxed);
                 poh_service.join().unwrap();
@@ -2590,10 +2621,10 @@ mod tests {
                     .for_each(|x| assert_eq!(*x, Ok(())));
             }
 
-            // Assert the user holds two lamports, not three. If the stage only outputs one
-            // entry, then the second transaction will be rejected, because it drives
+            // Assert the user doesn't hold three lamports. If the stage only outputs one
+            // entry, then one of the transactions will be rejected, because it drives
             // the account balance below zero before the credit is added.
-            assert_eq!(bank.get_balance(&alice.pubkey()), 2);
+            assert!(bank.get_balance(&alice.pubkey()) != 3);
         }
         Blockstore::destroy(ledger_path.path()).unwrap();
     }

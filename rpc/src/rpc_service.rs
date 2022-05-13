@@ -21,6 +21,7 @@ use {
     solana_client::rpc_cache::LargestAccountsCache,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{
+        bigtable_upload::ConfirmedBlockUploadConfig,
         bigtable_upload_service::BigTableUploadService, blockstore::Blockstore,
         leader_schedule_cache::LeaderScheduleCache,
     },
@@ -160,7 +161,22 @@ impl RpcRequestMiddleware {
     where
         P: AsRef<Path>,
     {
-        let root = &self.snapshot_config.as_ref().unwrap().snapshot_archives_dir;
+        let root = if self
+            .full_snapshot_archive_path_regex
+            .is_match(Path::new("").join(&stem).to_str().unwrap())
+        {
+            &self
+                .snapshot_config
+                .as_ref()
+                .unwrap()
+                .full_snapshot_archives_dir
+        } else {
+            &self
+                .snapshot_config
+                .as_ref()
+                .unwrap()
+                .incremental_snapshot_archives_dir
+        };
         let local_path = root.join(&stem);
         if local_path.exists() {
             local_path
@@ -236,7 +252,7 @@ impl RequestMiddleware for RpcRequestMiddleware {
                 // Convenience redirect to the latest snapshot
                 let full_snapshot_archive_info =
                     snapshot_utils::get_highest_full_snapshot_archive_info(
-                        &snapshot_config.snapshot_archives_dir,
+                        &snapshot_config.full_snapshot_archives_dir,
                     );
                 let snapshot_archive_info =
                     if let Some(full_snapshot_archive_info) = full_snapshot_archive_info {
@@ -244,7 +260,7 @@ impl RequestMiddleware for RpcRequestMiddleware {
                             Some(full_snapshot_archive_info.snapshot_archive_info().clone())
                         } else {
                             snapshot_utils::get_highest_incremental_snapshot_archive_info(
-                                &snapshot_config.snapshot_archives_dir,
+                                &snapshot_config.incremental_snapshot_archives_dir,
                                 full_snapshot_archive_info.slot(),
                             )
                             .map(|incremental_snapshot_archive_info| {
@@ -395,12 +411,13 @@ impl JsonRpcService {
                         info!("BigTable ledger storage initialized");
 
                         let bigtable_ledger_upload_service = if enable_bigtable_ledger_upload {
-                            Some(Arc::new(BigTableUploadService::new(
+                            Some(Arc::new(BigTableUploadService::new_with_config(
                                 runtime.clone(),
                                 bigtable_ledger_storage.clone(),
                                 blockstore.clone(),
                                 block_commitment_cache.clone(),
                                 current_transaction_status_slot.clone(),
+                                ConfirmedBlockUploadConfig::default(),
                                 exit_bigtable_ledger_upload_service.clone(),
                             )))
                         } else {

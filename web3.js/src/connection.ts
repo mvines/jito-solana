@@ -4174,6 +4174,7 @@ export class Connection {
    * @internal
    */
   _wsOnError(err: Error) {
+    this._rpcWebSocketConnected = false;
     console.error('ws error:', err.message);
   }
 
@@ -4181,6 +4182,7 @@ export class Connection {
    * @internal
    */
   _wsOnClose(code: number) {
+    this._rpcWebSocketConnected = false;
     this._rpcWebSocketGeneration++;
     if (this._rpcWebSocketHeartbeat) {
       clearInterval(this._rpcWebSocketHeartbeat);
@@ -4847,7 +4849,7 @@ export class Connection {
             try {
               this.removeSignatureListener(clientSubscriptionId);
               // eslint-disable-next-line no-empty
-            } catch {
+            } catch (_err) {
               // Already removed.
             }
           }
@@ -4895,7 +4897,7 @@ export class Connection {
           try {
             this.removeSignatureListener(clientSubscriptionId);
             // eslint-disable-next-line no-empty
-          } catch {
+          } catch (_err) {
             // Already removed.
           }
         },

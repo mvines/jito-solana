@@ -15,12 +15,12 @@ use crate::{
     hash::Hash,
     instruction::{CompiledInstruction, Instruction},
     message::{
-        compiled_keys::CompileError, legacy::BUILTIN_PROGRAMS_KEYS, AccountKeys, CompiledKeys,
+        compiled_keys::CompileError, legacy::is_builtin_key_or_sysvar, AccountKeys, CompiledKeys,
         MessageHeader, MESSAGE_VERSION_PREFIX,
     },
     pubkey::Pubkey,
     sanitize::SanitizeError,
-    short_vec, sysvar,
+    short_vec,
 };
 pub use loaded::*;
 
@@ -344,7 +344,7 @@ impl Message {
                 // demote reserved ids
                 self.account_keys
                     .get(key_index)
-                    .map(|key| sysvar::is_sysvar_id(key) || BUILTIN_PROGRAMS_KEYS.contains(key))
+                    .map(is_builtin_key_or_sysvar)
                     .unwrap_or_default()
             }
             && !{
@@ -685,7 +685,7 @@ mod tests {
         let address_lookup_table_accounts = vec![
             AddressLookupTableAccount {
                 key: Pubkey::new_unique(),
-                addresses: vec![keys[5], keys[6], program_id],
+                addresses: vec![keys[5], keys[6]],
             },
             AddressLookupTableAccount {
                 key: Pubkey::new_unique(),
@@ -705,19 +705,19 @@ mod tests {
                 header: MessageHeader {
                     num_required_signatures: 3,
                     num_readonly_signed_accounts: 1,
-                    num_readonly_unsigned_accounts: 1
+                    num_readonly_unsigned_accounts: 2
                 },
                 recent_blockhash,
-                account_keys: vec![keys[0], keys[1], keys[2], keys[3], keys[4]],
+                account_keys: vec![keys[0], keys[1], keys[2], keys[3], keys[4], program_id],
                 instructions: vec![CompiledInstruction {
-                    program_id_index: 7,
-                    accounts: vec![1, 2, 3, 4, 5, 6],
+                    program_id_index: 5,
+                    accounts: vec![1, 2, 3, 4, 6, 7],
                     data: vec![],
                 },],
                 address_table_lookups: vec![MessageAddressTableLookup {
                     account_key: address_lookup_table_accounts[0].key,
                     writable_indexes: vec![0],
-                    readonly_indexes: vec![1, 2],
+                    readonly_indexes: vec![1],
                 }],
             })
         );
