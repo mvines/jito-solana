@@ -6,7 +6,7 @@ use {
     crate::{
         backoff::BackoffStrategy,
         blocking_proxy_client::{AuthenticationInjector, BlockingProxyClient, ProxyError},
-        bundle::Bundle,
+        bundle::BundlePacketBatch,
         proto::validator_interface::{
             subscribe_packets_response::Msg, SubscribeBundlesResponse, SubscribePacketsResponse,
         },
@@ -72,7 +72,7 @@ impl MevStage {
         cluster_info: &Arc<ClusterInfo>,
         validator_interface_address: String,
         verified_packet_sender: Sender<Vec<PacketBatch>>,
-        bundle_sender: Sender<Vec<Bundle>>,
+        bundle_sender: Sender<Vec<BundlePacketBatch>>,
         packet_intercept_receiver: Receiver<PacketBatch>,
         packet_sender: Sender<PacketBatch>,
         exit: Arc<AtomicBool>,
@@ -121,7 +121,7 @@ impl MevStage {
         interceptor: AuthenticationInjector,
         verified_packet_sender: Sender<Vec<PacketBatch>>,
         heartbeat_sender: Sender<HeartbeatEvent>,
-        bundle_sender: Sender<Vec<Bundle>>,
+        bundle_sender: Sender<Vec<BundlePacketBatch>>,
         exit: Arc<AtomicBool>,
     ) -> JoinHandle<()> {
         thread::Builder::new()
@@ -330,7 +330,7 @@ impl MevStage {
             std::result::Result<Option<SubscribeBundlesResponse>, Status>,
             RecvError,
         >,
-        bundle_sender: &Sender<Vec<Bundle>>,
+        bundle_sender: &Sender<Vec<BundlePacketBatch>>,
     ) -> Result<()> {
         match msg {
             Ok(msg) => {
@@ -361,7 +361,7 @@ impl MevStage {
         tpu_fwd: SocketAddr,
         verified_packet_sender: &Sender<Vec<PacketBatch>>,
         backoff: &mut BackoffStrategy,
-        bundle_sender: &Sender<Vec<Bundle>>,
+        bundle_sender: &Sender<Vec<BundlePacketBatch>>,
         exit: &Arc<AtomicBool>,
     ) -> Result<()> {
         let packet_receiver = client.subscribe_packets()?;
@@ -431,7 +431,7 @@ impl MevStage {
         heartbeat_sender: &Sender<HeartbeatEvent>,
         verified_packet_sender: &Sender<Vec<PacketBatch>>,
         backoff: &mut BackoffStrategy,
-        bundle_sender: &Sender<Vec<Bundle>>,
+        bundle_sender: &Sender<Vec<BundlePacketBatch>>,
         exit: &Arc<AtomicBool>,
     ) -> Result<()> {
         let mut client =

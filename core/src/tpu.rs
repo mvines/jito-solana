@@ -5,6 +5,7 @@ use {
     crate::{
         banking_stage::BankingStage,
         broadcast_stage::{BroadcastStage, BroadcastStageType, RetransmitSlotsReceiver},
+        bundle_scheduler::BundleScheduler,
         bundle_stage::BundleStage,
         cluster_info_vote_listener::{
             ClusterInfoVoteListener, GossipDuplicateConfirmedSlotsSender,
@@ -199,6 +200,8 @@ impl Tpu {
             packet_sender,
             exit.clone(),
         );
+
+        let bundle_scheduler = BundleScheduler::new(bundle_receiver.clone());
 
         let (verified_gossip_vote_packets_sender, verified_gossip_vote_packets_receiver) =
             unbounded();

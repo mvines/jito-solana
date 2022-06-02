@@ -1,6 +1,6 @@
 use solana_perf::packet::PacketBatch;
 
 #[derive(Clone, Debug)]
-pub struct Bundle {
+pub struct BundlePacketBatch {
     pub batch: PacketBatch,
 }

@@ -13,7 +13,7 @@ use {
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::blockstore_processor::TransactionStatusSender,
     solana_measure::measure::Measure,
-    solana_mev::{bundle::Bundle, tip_manager::TipManager},
+    solana_mev::{bundle::BundlePacketBatch, tip_manager::TipManager},
     solana_perf::{cuda_runtime::PinnedVec, packet::Packet},
     solana_poh::poh_recorder::{
         BankStart, PohRecorder,
@@ -84,7 +84,7 @@ impl BundleStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: ReplayVoteSender,
         cost_model: Arc<RwLock<CostModel>>,
-        bundle_receiver: Receiver<Vec<Bundle>>,
+        bundle_receiver: Receiver<Vec<BundlePacketBatch>>,
         exit: Arc<AtomicBool>,
         tip_manager: Arc<Mutex<TipManager>>,
     ) -> Self {
@@ -107,7 +107,7 @@ impl BundleStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: ReplayVoteSender,
         cost_model: Arc<RwLock<CostModel>>,
-        bundle_receiver: Receiver<Vec<Bundle>>,
+        bundle_receiver: Receiver<Vec<BundlePacketBatch>>,
         exit: Arc<AtomicBool>,
         tip_manager: Arc<Mutex<TipManager>>,
     ) -> Self {
@@ -249,7 +249,7 @@ impl BundleStage {
     ///   state.
     fn execute_bundle(
         cluster_info: &Arc<ClusterInfo>,
-        bundle: Bundle,
+        bundle: BundlePacketBatch,
         poh_recorder: &Arc<Mutex<PohRecorder>>,
         recorder: &TransactionRecorder,
         transaction_status_sender: &Option<TransactionStatusSender>,
@@ -917,7 +917,7 @@ impl BundleStage {
         cluster_info: Arc<ClusterInfo>,
         poh_recorder: &Arc<Mutex<PohRecorder>>,
         transaction_status_sender: Option<TransactionStatusSender>,
-        bundle_receiver: Receiver<Vec<Bundle>>,
+        bundle_receiver: Receiver<Vec<BundlePacketBatch>>,
         gossip_vote_sender: ReplayVoteSender,
         id: u32,
         cost_model: Arc<RwLock<CostModel>>,
@@ -964,7 +964,7 @@ impl BundleStage {
     }
 
     fn get_bundle_txs(
-        bundle: &Bundle,
+        bundle: &BundlePacketBatch,
         bank: &Arc<Bank>,
         tip_program_id: &Pubkey,
     ) -> Vec<SanitizedTransaction> {
