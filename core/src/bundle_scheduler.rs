@@ -1,10 +1,10 @@
 use {
     crate::{unprocessed_packet_batches, unprocessed_packet_batches::ImmutableDeserializedPacket},
+    chrono::Duration,
     crossbeam_channel::{bounded, Receiver, RecvError, Sender},
-    futures_util::future::err,
     solana_mev::bundle::BundlePacketBatch,
     solana_perf::cuda_runtime::PinnedVec,
-    solana_runtime::{accounts::AccountLocks, bank::Bank, contains::Contains},
+    solana_runtime::{bank::Bank, contains::Contains},
     solana_sdk::{
         bpf_loader_upgradeable,
         bundle::Bundle,
@@ -51,21 +51,32 @@ impl BundleScheduler {
         }
     }
 
-    /// Receives a bundle and blocks on ensuring
+    /// Function for consumers to call.
+    /// Blocks on getting a bundle.
     pub fn recv(&mut self, bank: &Arc<Bank>, tip_program_id: &Pubkey) -> Result<Bundle, RecvError> {
         self.refill_locked_bundles(bank, tip_program_id);
 
-        // pop bundle packets, serialize to transactions, then run validation checks
-        // TODO (LB): if there's no packets, this will block forever bc nothing will refill it
         let packet_batch = self.locked_bundle_receiver.recv()?;
-        let txs = Self::get_bundle_txs(&packet_batch, bank, tip_program_id);
+        let transactions = Self::get_bundle_txs(&packet_batch, bank, tip_program_id);
+        // need to double check transactions against packet_batch and unlock if failure
+
+        // need to sanity checking on what was locked + serialized first time around because
+        // the accounts transactions load can change due to a change in the lookup table between
+        // when the original account locks were locked and the current bank.
 
         // probably want to block until it's unlocked in AccountLocks?
-
         Ok(Bundle::default())
     }
 
-    pub fn unlock(&mut self, batch: &BundlePacketBatch) {}
+    /// Unlocks the pre-lock accounts in this batch. This should be called from bundle_stage.
+    /// THIS MUST BE CALLED NO MATTER WHAT!
+    pub fn unlock(&mut self, batch: &[SanitizedTransaction]) {
+        // if self.locked_bundle_receiver.is_empty
+        // the sets account_locks and tx_to_locks shall be empty. should log an error if that happens.
+    }
+
+    /// Checks to see if any accounts in any of these transactions are
+    pub fn get_lock_results(&mut self, transactions: &[SanitizedTransaction]) {}
 
     fn prelock_bundle_accounts(
         &mut self,
@@ -150,7 +161,15 @@ impl BundleScheduler {
     /// that have all been pre-locked
     fn refill_locked_bundles(&mut self, bank: &Arc<Bank>, tip_program_id: &Pubkey) {
         while self.unlocked_bundle_receiver.len() <= NUM_BUNDLES_LOOKAHEAD {
-            if let Ok(batch) = self.unlocked_bundle_receiver.try_recv() {
+            // if there's no locked or pending bundles, want to block on unlocked bundles. Once there
+            // are locked bundles, we don't need to block and can proceed.
+            let batch = if !self.locked_bundle_receiver.is_empty() {
+                self.unlocked_bundle_receiver.recv()
+            } else {
+                self.unlocked_bundle_receiver.try_recv()
+            };
+
+            if let Ok(batch) = batch {
                 match self.prelock_bundle_accounts(&batch, bank, tip_program_id) {
                     Ok(_) => {
                         if let Err(e) = self.locked_bundle_sender.send(batch) {
