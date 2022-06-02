@@ -17,7 +17,10 @@ use {
         },
     },
     std::{
-        collections::{hash_map::RandomState, HashMap, HashSet},
+        collections::{
+            hash_map::{Entry, RandomState},
+            HashMap, HashSet,
+        },
         sync::Arc,
     },
 };
@@ -48,6 +51,22 @@ impl BundleScheduler {
         }
     }
 
+    /// Receives a bundle and blocks on ensuring
+    pub fn recv(&mut self, bank: &Arc<Bank>, tip_program_id: &Pubkey) -> Result<Bundle, RecvError> {
+        self.refill_locked_bundles(bank, tip_program_id);
+
+        // pop bundle packets, serialize to transactions, then run validation checks
+        // TODO (LB): if there's no packets, this will block forever bc nothing will refill it
+        let packet_batch = self.locked_bundle_receiver.recv()?;
+        let txs = Self::get_bundle_txs(&packet_batch, bank, tip_program_id);
+
+        // probably want to block until it's unlocked in AccountLocks?
+
+        Ok(Bundle::default())
+    }
+
+    pub fn unlock(&mut self, batch: &BundlePacketBatch) {}
+
     fn prelock_bundle_accounts(
         &mut self,
         batch: &BundlePacketBatch,
@@ -55,7 +74,6 @@ impl BundleScheduler {
         tip_program_id: &Pubkey,
     ) -> Result<(), TransactionError> {
         let transactions = Self::get_bundle_txs(&batch, bank, tip_program_id);
-
         if transactions.is_empty() || batch.batch.packets.len() != transactions.len() {
             warn!(
                 "error deserializing packets, throwing bundle away e: {:?}",
@@ -64,13 +82,13 @@ impl BundleScheduler {
             return Err(TransactionError::TooManyAccountLocks); // todo need better error message
         }
 
-        // make sure not already locked
+        // ensure we haven't already locked these and don't end up double-counting something
         let signatures: HashSet<&Signature, RandomState> =
             HashSet::from_iter(transactions.iter().map(|tx| tx.signature()));
         for sig in signatures {
             if self.tx_to_locks.contains(sig) {
                 warn!("already locked tx",);
-                return Err(TransactionError::TooManyAccountLocks); // todo need better error message
+                return Err(TransactionError::AlreadyProcessed);
             }
         }
 
@@ -103,38 +121,50 @@ impl BundleScheduler {
         });
 
         for (tx, locks) in transactions.into_iter().zip(transactions_locks.into_iter()) {
-            if let Some(_) = self.tx_to_locks.insert(*tx.signature(), locks) {
-                panic!("already locked accounts for tx: {}", *tx.signature());
+            if let Some(locks) = self.tx_to_locks.insert(*tx.signature(), locks) {
+                // this should never happen but we should handle it anyway
+                error!("already locked accounts for tx: {}", *tx.signature());
+                self.remove_locks(locks);
             }
         }
         Ok(())
     }
 
+    fn remove_locks(&mut self, locks: HashSet<Pubkey, RandomState>) {
+        for a in locks {
+            match self.account_locks.entry(a) {
+                Entry::Occupied(mut e) => {
+                    *e.get_mut() -= 1;
+                    if e.get() == 0 {
+                        e.remove_entry()
+                    }
+                }
+                Entry::Vacant(_) => {
+                    panic!("wtf yooo");
+                }
+            }
+        }
+    }
+
+    /// Moves bundles off the main queue into a locked bundle queue, which contains bundles
+    /// that have all been pre-locked
     fn refill_locked_bundles(&mut self, bank: &Arc<Bank>, tip_program_id: &Pubkey) {
         while self.unlocked_bundle_receiver.len() <= NUM_BUNDLES_LOOKAHEAD {
             if let Ok(batch) = self.unlocked_bundle_receiver.try_recv() {
-                let _ = self.prelock_bundle_accounts(&batch, bank, tip_program_id);
-                if let Err(e) = self.locked_bundle_sender.send(batch) {
-                    error!("error sending packet into locked bundle queue e: {}", e);
+                match self.prelock_bundle_accounts(&batch, bank, tip_program_id) {
+                    Ok(_) => {
+                        if let Err(e) = self.locked_bundle_sender.send(batch) {
+                            error!("error sending packet into locked bundle queue e: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("error pre-locking accounts: {}", e);
+                    }
                 }
             } else {
                 break;
             }
         }
-    }
-
-    /// Blocks on receiving a bundle.
-    /// Fill up the locked accounts to
-    pub fn recv(&mut self, bank: &Arc<Bank>, tip_program_id: &Pubkey) -> Result<Bundle, RecvError> {
-        self.refill_locked_bundles(bank, tip_program_id);
-
-        // pop bundle packets, serialize to transactions, then run validation checks
-        let packet_batch = self.locked_bundle_receiver.recv()?;
-        let txs = Self::get_bundle_txs(&packet_batch, bank, tip_program_id);
-
-        // probably want to block until it's unlocked in AccountLocks?
-
-        Ok(Bundle::default())
     }
 
     fn get_bundle_txs(
@@ -206,6 +236,4 @@ impl BundleScheduler {
             .map(|(index, _)| index)
             .collect()
     }
-
-    pub fn unlock(&mut self, batch: &BundlePacketBatch) {}
 }
