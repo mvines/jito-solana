@@ -342,7 +342,7 @@ impl MevStage {
                         let batch = PacketBatch::new(
                             b.packets.into_iter().map(proto_packet_to_packet).collect(),
                         );
-                        Bundle { batch }
+                        BundlePacketBatch { batch }
                     })
                     .collect();
                 if let Err(e) = bundle_sender.send(bundles) {
