@@ -1,7 +1,7 @@
 use {
     crate::{unprocessed_packet_batches, unprocessed_packet_batches::ImmutableDeserializedPacket},
     crossbeam_channel::{bounded, Receiver, RecvError, Sender, TryRecvError},
-    solana_mev::bundle::BundlePacketBatch,
+    solana_mev::bundle::{BundlePacketBatch, SanitizedBundle},
     solana_perf::cuda_runtime::PinnedVec,
     solana_runtime::{bank::Bank, contains::Contains},
     solana_sdk::{
@@ -54,25 +54,34 @@ impl BundleScheduler {
         &mut self,
         bank: &Arc<Bank>,
         tip_program_id: &Pubkey,
-    ) -> Result<Vec<Bundle>, RecvError> {
+    ) -> Result<Vec<SanitizedBundle>, RecvError> {
         self.refill_locked_bundles(bank, tip_program_id);
 
         let packet_batches = self.locked_bundle_receiver.recv()?;
         let bundles = packet_batches
             .into_iter()
-            .map(|b| {
-                // let transactions = Self::get_bundle_txs(&packet_batch, bank, tip_program_id);
-                Bundle::default()
+            .filter_map(|packet_batch| {
+                let transactions = Self::get_bundle_txs(&packet_batch, bank, tip_program_id);
+                if transactions.is_empty() || packet_batch.batch.packets.len() != transactions.len()
+                {
+                    warn!(
+                        "error deserializing packets, throwing bundle away e: {:?}",
+                        packet_batch
+                    );
+                    // TODO: need to unlock accounts
+                    return None;
+                }
+
+                // double check to see if accounts locked changed and if so, pre-lock new ones, update map
+                // the accounts transactions load can change due to a change in the lookup table between
+                // when the original account locks were locked and the current bank.
+
+                Some(SanitizedBundle { transactions })
             })
             .collect();
 
-        // need to double check transactions against packet_batch and unlock if failure
+        // TODO: block until all accounts are unlocked in bank's TransactionAccountsLock
 
-        // need to sanity checking on what was locked + serialized first time around because
-        // the accounts transactions load can change due to a change in the lookup table between
-        // when the original account locks were locked and the current bank.
-
-        // probably want to block until it's unlocked in AccountLocks?
         Ok(bundles)
     }
 
