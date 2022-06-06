@@ -349,6 +349,8 @@ impl MevStage {
                 bundles.into_iter().for_each(|b| {
                     if let Err(e) = bundle_sender.send(b) {
                         error!("error forwarding bundle: {:?}", e);
+                    } else {
+                        info!("[bill] SENT BUNDLE");
                     }
                 });
             }
@@ -378,6 +380,7 @@ impl MevStage {
         let mut total_msg_received = 0;
         let mut total_batches_received = 0;
         let mut total_packets_received = 0;
+        let mut total_bundles_received = 0;
 
         loop {
             select! {
@@ -414,6 +417,7 @@ impl MevStage {
                     total_packets_received += packets_received;
                 }
                 recv(bundle_receiver) -> msg => {
+                    total_bundles_received += 1;
                     let _ = Self::handle_bundle(msg, bundle_sender)?;
                 }
                 recv(metrics_tick) -> _ => {
@@ -422,6 +426,7 @@ impl MevStage {
                         ("msg_received", total_msg_received, i64),
                         ("batches_received", total_batches_received, i64),
                         ("packets_received", total_packets_received, i64),
+                        ("bundles_received", total_bundles_received, i64),
                     );
                 }
             }

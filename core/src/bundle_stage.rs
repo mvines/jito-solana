@@ -271,6 +271,8 @@ impl BundleStage {
         let tip_program_id = tip_manager.lock().unwrap().program_id();
         let tip_pdas = tip_manager.lock().unwrap().get_tip_accounts();
 
+        info!("[bill] BUNDLE CHKPT 1");
+
         // ************************************************************************
         // Ensure validator is leader according to PoH
         // ************************************************************************
@@ -289,6 +291,8 @@ impl BundleStage {
         if transactions.is_empty() || bundle.batch.packets.len() != transactions.len() {
             return Err(BundleExecutionError::InvalidBundle);
         }
+
+        info!("[bill] BUNDLE CHKPT 2");
 
         // ************************************************************************
         // Quality-of-service and block size check
@@ -335,6 +339,8 @@ impl BundleStage {
                 cluster_info,
             )?;
         }
+
+        info!("[bill] BUNDLE CHKPT 3");
 
         while chunk_start != transactions.len() {
             if !Bank::should_bank_still_be_processing_txs(bank_creation_time, bank.ns_per_slot) {
@@ -406,6 +412,8 @@ impl BundleStage {
                 return Err(e);
             }
 
+            info!("[bill] BUNDLE CHKPT 4");
+
             // *********************************************************************************
             // Cache results so next iterations of bundle execution can load cached state
             // instead of using AccountsDB which contains stale execution data.
@@ -471,6 +479,8 @@ impl BundleStage {
             );
             e
         })?;
+
+        info!("[bill] BUNDLE CHKPT 5");
 
         for r in execution_results {
             let mut output = r.load_and_execute_tx_output;
@@ -545,6 +555,7 @@ impl BundleStage {
         qos_service.report_metrics(bank.clone());
 
         drop(freeze_lock);
+        info!("[bill] MADE IT TO END OF EXECUTE BUNDLE!");
 
         Ok(())
     }
@@ -988,9 +999,11 @@ impl BundleStage {
                 &qos_service,
                 &tip_manager,
             ) {
-                Ok(_) => {}
+                Ok(_) => {
+                    info!("[bill] EXECUTED BUNDLE?!?!");
+                }
                 Err(e) => {
-                    error!("error recording bundle {:?}", e);
+                    error!("[bill] error recording bundle {:?}", e);
                 }
             }
         }
