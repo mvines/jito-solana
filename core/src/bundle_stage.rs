@@ -1045,10 +1045,10 @@ impl BundleStage {
             // - authorized_voter_pubkey: read-only
             // - node_keypair pubkey: payer (writeable)
             let vote_accounts = bank.vote_accounts();
-            let mut consens_accounts: HashSet<&Pubkey, RandomState> =
+            let mut consensus_accounts: HashSet<&Pubkey, RandomState> =
                 HashSet::from_iter(vote_accounts.keys());
-            consens_accounts.extend(epoch_stakes.epoch_authorized_voters().keys());
-            consens_accounts.extend(epoch_stakes.node_id_to_vote_accounts().keys());
+            consensus_accounts.extend(epoch_stakes.epoch_authorized_voters().keys());
+            consensus_accounts.extend(epoch_stakes.node_id_to_vote_accounts().keys());
 
             deserialized_packets
                 .filter_map(|p| {
@@ -1059,7 +1059,7 @@ impl BundleStage {
                         bank.vote_only_bank(),
                         bank.as_ref(),
                         tip_program_id,
-                        &consens_accounts,
+                        &consensus_accounts,
                     )
                 })
                 .collect()
