@@ -7,7 +7,7 @@ use {
     solana_sdk::{
         bpf_loader_upgradeable,
         bundle::Bundle,
-        feature_set,
+        feature_set::{self, FeatureSet},
         packet::Packet,
         pubkey::Pubkey,
         signature::Signature,
@@ -29,7 +29,7 @@ pub struct BundleScheduler {
     locked_bundle_receiver: Receiver<Vec<BundlePacketBatch>>,
 
     account_locks: HashMap<Pubkey, u64>,
-    tx_to_locks: HashMap<Signature, HashSet<Pubkey>>,
+    tx_to_accounts: HashMap<Signature, HashSet<Pubkey>>,
 }
 
 // this will need to be tuned
@@ -44,7 +44,7 @@ impl BundleScheduler {
             locked_bundle_sender: bundle_tx_sender,
             locked_bundle_receiver: bundle_tx_receiver,
             account_locks: HashMap::new(),
-            tx_to_locks: HashMap::new(),
+            tx_to_accounts: HashMap::new(),
         }
     }
 
@@ -68,13 +68,27 @@ impl BundleScheduler {
                         "error deserializing packets, throwing bundle away e: {:?}",
                         packet_batch
                     );
-                    // TODO: need to unlock accounts
+                    for tx in transactions {
+                        // ensure we drop locks if we're dropping bundles too
+                        if let Some(locks) = self.tx_to_accounts.remove(tx.signature()) {
+                            self.remove_locks(&locks);
+                        }
+                    }
                     return None;
                 }
 
-                // double check to see if accounts locked changed and if so, pre-lock new ones, update map
-                // the accounts transactions load can change due to a change in the lookup table between
-                // when the original account locks were locked and the current bank.
+                let transactions_locks: Vec<HashSet<Pubkey>> =
+                    Self::get_accounts(&transactions, &bank.feature_set);
+
+                for (tx, new_locks) in transactions.iter().zip(transactions_locks.into_iter()) {
+                    if let Some(old_locks) = self.tx_to_accounts.get(tx.signature()) {
+                        if old_locks != &new_locks {
+                            self.remove_locks(old_locks);
+                            self.add_locks(&[new_locks]);
+                            // todo: update self.tx_to_accounts to contain new_locks instead of old locks
+                        }
+                    }
+                }
 
                 Some(SanitizedBundle { transactions })
             })
@@ -87,9 +101,22 @@ impl BundleScheduler {
 
     /// Unlocks the pre-lock accounts in this batch. This should be called from bundle_stage.
     /// THIS MUST BE CALLED NO MATTER WHAT!
+    /// TODO: use SanitizedBundle here
     pub fn unlock(&mut self, batch: &[SanitizedTransaction]) {
-        // if self.locked_bundle_receiver.is_empty
-        // the sets account_locks and tx_to_locks shall be empty. should log an error if that happens.
+        for tx in batch {
+            match self.tx_to_accounts.get(tx.signature()) {
+                None => {
+                    error!("transaction not present in locks map!!!");
+                }
+                Some(accounts) => {
+                    self.remove_locks(accounts);
+                    // TODO: remove signature from tx_to_accounts
+                }
+            }
+        }
+        // TODO
+        //  if self.locked_bundle_receiver.is_empty
+        //  the sets account_locks and tx_to_locks shall be empty. should log an error if that happens.
     }
 
     /// Runs list of sanitized transactions by to determine if they're pre-locked
@@ -102,6 +129,7 @@ impl BundleScheduler {
         tip_program_id: &Pubkey,
     ) -> Result<(), TransactionError> {
         for batch in batches {
+            // todo: move the check below to a Result<Vec<SanitizedTransaction>, TransactionError>
             let transactions = Self::get_bundle_txs(&batch, bank, tip_program_id);
             if transactions.is_empty() || batch.batch.packets.len() != transactions.len() {
                 warn!(
@@ -115,54 +143,60 @@ impl BundleScheduler {
             let signatures: HashSet<&Signature, RandomState> =
                 HashSet::from_iter(transactions.iter().map(|tx| tx.signature()));
             for sig in signatures {
-                if self.tx_to_locks.contains(sig) {
+                if self.tx_to_accounts.contains(sig) {
                     warn!("already locked tx",);
                     continue;
                 }
             }
 
-            let transactions_locks: Vec<HashSet<Pubkey>> = transactions
-                .iter()
-                .filter_map(|tx| {
-                    let locks = tx.get_account_locks(&bank.feature_set).ok()?;
-                    let mut pubkeys = HashSet::new();
-                    for a in locks.writable {
-                        pubkeys.insert(*a);
-                    }
-                    for a in locks.readonly {
-                        pubkeys.insert(*a);
-                    }
-                    Some(pubkeys)
-                })
-                .collect();
+            let transactions_locks: Vec<HashSet<Pubkey>> =
+                Self::get_accounts(&transactions, &bank.feature_set);
             if transactions_locks.len() != transactions.len() {
                 warn!("error locking transactions, throwing bundle away");
                 continue;
             }
 
-            transactions_locks.iter().for_each(|locks| {
-                locks.iter().for_each(|a| {
-                    self.account_locks
-                        .entry(*a)
-                        .and_modify(|num| *num += 1)
-                        .or_insert(1);
-                });
-            });
+            self.add_locks(&transactions_locks);
 
-            for (tx, locks) in transactions.into_iter().zip(transactions_locks.into_iter()) {
-                if let Some(locks) = self.tx_to_locks.insert(*tx.signature(), locks) {
-                    // this should never happen but we should handle it anyway
-                    error!("already locked accounts for tx: {}", *tx.signature());
-                    self.remove_locks(locks);
-                }
-            }
+            // TODO: insert into tx_to_accounts
         }
         Ok(())
     }
 
-    fn remove_locks(&mut self, locks: HashSet<Pubkey, RandomState>) {
+    fn add_locks(&mut self, transactions_locks: &[HashSet<Pubkey>]) {
+        transactions_locks.iter().for_each(|locks| {
+            locks.iter().for_each(|a| {
+                self.account_locks
+                    .entry(*a)
+                    .and_modify(|num| *num += 1)
+                    .or_insert(1);
+            });
+        });
+    }
+
+    fn get_accounts(
+        transactions: &[SanitizedTransaction],
+        feature_set: &FeatureSet,
+    ) -> Vec<HashSet<Pubkey>> {
+        transactions
+            .iter()
+            .filter_map(|tx| {
+                let locks = tx.get_account_locks(feature_set).ok()?;
+                let mut pubkeys = HashSet::new();
+                for a in locks.writable {
+                    pubkeys.insert(*a);
+                }
+                for a in locks.readonly {
+                    pubkeys.insert(*a);
+                }
+                Some(pubkeys)
+            })
+            .collect()
+    }
+
+    fn remove_locks(&mut self, locks: &HashSet<Pubkey, RandomState>) {
         for a in locks {
-            match self.account_locks.entry(a) {
+            match self.account_locks.entry(*a) {
                 Entry::Occupied(mut e) => {
                     *e.get_mut() -= 1;
                     if e.get() == &0_u64 {
@@ -170,7 +204,7 @@ impl BundleScheduler {
                     }
                 }
                 Entry::Vacant(_) => {
-                    panic!("wtf yooo");
+                    panic!("expected lock to be present for account: {:?}", a);
                 }
             }
         }
@@ -182,7 +216,7 @@ impl BundleScheduler {
         while self.unlocked_bundle_receiver.len() <= NUM_BATCHES_LOOKAHEAD {
             // if there's no locked or pending bundles, want to block on unlocked bundles. Once there
             // are locked bundles, we don't need to block and can proceed.
-            let batches = if !self.locked_bundle_receiver.is_empty() {
+            let batches = if self.locked_bundle_receiver.is_empty() {
                 self.unlocked_bundle_receiver
                     .recv()
                     .map_err(|_| TryRecvError::Disconnected)
