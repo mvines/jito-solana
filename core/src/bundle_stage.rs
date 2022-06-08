@@ -384,6 +384,9 @@ impl BundleStage {
                 "collect_balances",
             );
 
+            for (lock_result, tx) in batch.lock_results().iter().zip(batch.sanitized_transactions().iter()) {
+                info!("[bill] tx: {:?}, lock_result: {:?}", tx.signature(), lock_result);
+            }
             let (mut load_and_execute_transactions_output, load_execute_time) = Measure::this(
                 |_| {
                     bank.load_and_execute_transactions(
@@ -400,6 +403,10 @@ impl BundleStage {
                 "load_execute",
             );
             execute_and_commit_timings.load_execute_us = load_execute_time.as_us();
+
+            for (tx, execution_result) in batch.sanitized_transactions().iter().zip(load_and_execute_transactions_output.execution_results.iter()) {
+                info!("[bill] tx: {:?} execution_result: {:?}", tx.signature(), execution_result);
+            }
 
             if let Err(e) = Self::check_all_executed_ok(
                 &load_and_execute_transactions_output
