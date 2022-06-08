@@ -81,12 +81,22 @@ impl BundleScheduler {
                     Self::get_accounts(&transactions, &bank.feature_set);
 
                 for (tx, new_locks) in transactions.iter().zip(transactions_locks.into_iter()) {
-                    if let Some(old_locks) = self.tx_to_accounts.get(tx.signature()) {
-                        if old_locks != &new_locks {
-                            self.remove_locks(old_locks);
-                            self.add_locks(&[new_locks]);
-                            // todo: update self.tx_to_accounts to contain new_locks instead of old locks
+                    let maybe_new_locks = match self.tx_to_accounts.entry(*tx.signature()) {
+                        Entry::Occupied(e) => {
+                            if e.get() != &new_locks {
+                                Some(new_locks)
+                            } else {
+                                None
+                            }
                         }
+                        Entry::Vacant(_) => None,
+                    };
+                    if let Some(new_locks) = maybe_new_locks {
+                        self.remove_locks(self.tx_to_accounts.get(tx.signature()).unwrap());
+
+                        self.tx_to_accounts
+                            .insert(*tx.signature(), new_locks.clone());
+                        self.add_locks(&[new_locks]);
                     }
                 }
 
