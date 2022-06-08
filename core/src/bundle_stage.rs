@@ -1,6 +1,7 @@
 //! The `banking_stage` processes Transaction messages. It is intended to be used
 //! to contruct a software pipeline. The stage uses all available CPU cores and
 //! can do its processing in parallel with signature verification on the GPU.
+use std::any::Any;
 use {
     crate::{
         banking_stage::BatchedTransactionDetails,
@@ -62,6 +63,7 @@ use {
     },
 };
 use solana_runtime::bank::CommitTransactionCounts;
+use solana_sdk::bundle::error::BundleExecutionError::NotLeaderYet;
 
 type BundleExecutionResult<T> = std::result::Result<T, BundleExecutionError>;
 
@@ -412,7 +414,7 @@ impl BundleStage {
                 return Err(e);
             }
 
-            info!("[bill] BUNDLE CHKPT 4");
+            info!("[bill] BUNDLE CHKPT 4: {}", bank.slot());
 
             // *********************************************************************************
             // Cache results so next iterations of bundle execution can load cached state
@@ -480,11 +482,12 @@ impl BundleStage {
             e
         })?;
 
-        info!("[bill] BUNDLE CHKPT 5");
 
         for r in execution_results {
             let mut output = r.load_and_execute_tx_output;
             let sanitized_txs = r.sanitized_txs;
+
+            info!("[bill] tx output: {} executed {} succeeded", output.executed_transactions_count, output.executed_with_successful_result_count);
 
             // TODO: @buffalu_ double check: e66ea7cb6ac1b9881b11c81ecfec287af6a59754
             let (last_blockhash, lamports_per_signature) = bank.last_blockhash_and_lamports_per_signature();
@@ -972,6 +975,7 @@ impl BundleStage {
     ) {
         let recorder = poh_recorder.lock().unwrap().recorder();
         let qos_service = QosService::new(cost_model, id);
+        let mut local_bundle_cache: Vec<Bundle> = Vec::new();
 
         loop {
             if exit.load(Ordering::Relaxed) {
@@ -989,6 +993,8 @@ impl BundleStage {
                 }
             };
 
+            let mut should_add_recent_to_cache = false;
+            let bundle_clone = bundle.clone();
             match Self::execute_bundle(
                 &cluster_info,
                 bundle,
@@ -1004,8 +1010,39 @@ impl BundleStage {
                 }
                 Err(e) => {
                     error!("[bill] error recording bundle {:?}", e);
+                    if e == NotLeaderYet {
+                        should_add_recent_to_cache = true;
+                    }
                 }
             }
+            let mut next_cache = Vec::new();
+            for cached_bundle in local_bundle_cache {
+                let clone = cached_bundle.clone();
+                match Self::execute_bundle(
+                    &cluster_info,
+                    cached_bundle,
+                    poh_recorder,
+                    &recorder,
+                    &transaction_status_sender,
+                    &gossip_vote_sender,
+                    &qos_service,
+                    &tip_manager,
+                ) {
+                    Ok(_) => {
+                        info!("[bill] cache EXECUTED BUNDLE?!?!");
+                    }
+                    Err(e) => {
+                        error!("[bill] cache error recording bundle {:?}", e);
+                        if e == NotLeaderYet {
+                            next_cache.push(clone);
+                        }
+                    }
+                }
+            }
+            if should_add_recent_to_cache {
+                next_cache.push(bundle_clone);
+            }
+            local_bundle_cache = next_cache;
         }
     }
 
@@ -1046,7 +1083,7 @@ impl BundleStage {
     ) -> Record {
         let mixins_txs = execution_results_txs
             .iter()
-            .map(|r| {
+            .filter_map(|r| {
                 let processed_transactions: Vec<VersionedTransaction> = r
                     .load_and_execute_tx_output
                     .execution_results
@@ -1061,7 +1098,12 @@ impl BundleStage {
                     })
                     .collect();
                 let hash = hash_transactions(&processed_transactions[..]);
-                (hash, processed_transactions)
+                if processed_transactions.len() == 0 {
+                    info!("[bill] GOT 0 LEN PROCESSED TXS!");
+                    None
+                } else {
+                    Some((hash, processed_transactions))
+                }
             })
             .collect();
         Record {

@@ -2737,7 +2737,7 @@ fn main() {
                 let genesis_config = open_genesis_config_by(&ledger_path, arg_matches);
                 let include_sysvars = arg_matches.is_present("include_sysvars");
                 let blockstore =
-                    open_blockstore(&ledger_path, AccessType::Secondary, wal_recovery_mode);
+                    open_blockstore(&ledger_path, AccessType::Primary, wal_recovery_mode);
                 let (bank_forks, ..) = load_bank_forks(
                     arg_matches,
                     &genesis_config,

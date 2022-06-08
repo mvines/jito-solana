@@ -1,6 +1,6 @@
 use {solana_program::pubkey::Pubkey, solana_sdk::transaction::TransactionError, thiserror::Error};
 
-#[derive(Error, Debug, Clone)]
+#[derive(Error, PartialEq, Eq, Debug, Clone)]
 pub enum BundleExecutionError {
     #[error("Bank is not processing transactions.")]
     BankNotProcessingTransactions,
@@ -27,7 +27,7 @@ pub enum BundleExecutionError {
     TipError(#[from] TipPaymentError),
 }
 
-#[derive(Error, Debug, Clone)]
+#[derive(Error, PartialEq, Eq, Debug, Clone)]
 pub enum TipPaymentError {
     #[error("account is missing from bank: {0}")]
     AccountMissing(Pubkey),
