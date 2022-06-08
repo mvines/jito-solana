@@ -985,6 +985,31 @@ impl BundleStage {
                 match bundle_receiver.recv_timeout(Duration::from_millis(100)) {
                     Ok(bundle) => bundle,
                     Err(RecvTimeoutError::Timeout) => {
+                        let mut next_cache = Vec::new();
+                        for cached_bundle in local_bundle_cache {
+                            let clone = cached_bundle.clone();
+                            match Self::execute_bundle(
+                                &cluster_info,
+                                cached_bundle,
+                                poh_recorder,
+                                &recorder,
+                                &transaction_status_sender,
+                                &gossip_vote_sender,
+                                &qos_service,
+                                &tip_manager,
+                            ) {
+                                Ok(_) => {
+                                    info!("[bill] cache EXECUTED BUNDLE?!?!");
+                                }
+                                Err(e) => {
+                                    error!("[bill] cache error recording bundle {:?}", e);
+                                    if e == NotLeaderYet {
+                                        next_cache.push(clone);
+                                    }
+                                }
+                            }
+                        }
+                        local_bundle_cache = next_cache;
                         continue;
                     }
                     Err(RecvTimeoutError::Disconnected) => {
@@ -993,7 +1018,6 @@ impl BundleStage {
                 }
             };
 
-            let mut should_add_recent_to_cache = false;
             let bundle_clone = bundle.clone();
             match Self::execute_bundle(
                 &cluster_info,
@@ -1011,38 +1035,10 @@ impl BundleStage {
                 Err(e) => {
                     error!("[bill] error recording bundle {:?}", e);
                     if e == NotLeaderYet {
-                        should_add_recent_to_cache = true;
+                        local_bundle_cache.push(bundle_clone);
                     }
                 }
             }
-            let mut next_cache = Vec::new();
-            for cached_bundle in local_bundle_cache {
-                let clone = cached_bundle.clone();
-                match Self::execute_bundle(
-                    &cluster_info,
-                    cached_bundle,
-                    poh_recorder,
-                    &recorder,
-                    &transaction_status_sender,
-                    &gossip_vote_sender,
-                    &qos_service,
-                    &tip_manager,
-                ) {
-                    Ok(_) => {
-                        info!("[bill] cache EXECUTED BUNDLE?!?!");
-                    }
-                    Err(e) => {
-                        error!("[bill] cache error recording bundle {:?}", e);
-                        if e == NotLeaderYet {
-                            next_cache.push(clone);
-                        }
-                    }
-                }
-            }
-            if should_add_recent_to_cache {
-                next_cache.push(bundle_clone);
-            }
-            local_bundle_cache = next_cache;
         }
     }
 
