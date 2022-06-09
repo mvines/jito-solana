@@ -1,3 +1,24 @@
+//! The `bundle_scheduler` module is responsible for handling locking and scheduling around bundles.
+//!
+//! The scheduler has two main features:
+//! - prevent BankingStage from executing a transaction that contains account overlap with a
+//!   transaction in an executing bundle.
+//! - minimize BundleStage from being blocked from execution by AccountInUse from BankingStage. It
+//!   does this by looking ahead N bundle batches and pre-locking those accounts.
+//!
+//! On the first point: imagine we have a bundle of three transactions which write lock the following
+//! accounts:
+//! tx0: {A, B}
+//! tx1: {B, C}
+//! tx2: {C, D}
+//!
+//! BundleStage will not commit results of tx0, tx1, and tx2 until they're all done executing. If
+//! BundleStage is executing tx2 with accounts C & D and BankingStage concurrently
+//! executes and commits a transaction that writes to account B, then the results of this bundle
+//! may be invalid, causing the validator to produce an invalid block.
+//!
+//! The bundle scheduler prevents this by pre-locking all transactions in a bundle and BankingStage
+//! will reference these pre-locks when determining what to execute.
 use {
     crate::{unprocessed_packet_batches, unprocessed_packet_batches::ImmutableDeserializedPacket},
     crossbeam_channel::{bounded, Receiver, RecvError, Sender, TryRecvError},
@@ -6,12 +27,11 @@ use {
     solana_runtime::{bank::Bank, contains::Contains},
     solana_sdk::{
         bpf_loader_upgradeable,
-        bundle::Bundle,
-        feature_set::{self, FeatureSet},
+        feature_set::FeatureSet,
         packet::Packet,
         pubkey::Pubkey,
         signature::Signature,
-        transaction::{AddressLoader, SanitizedTransaction, TransactionError},
+        transaction::{self, AddressLoader, SanitizedTransaction, TransactionError},
     },
     std::{
         collections::{
@@ -48,8 +68,6 @@ impl BundleScheduler {
         }
     }
 
-    /// Function for consumers to call.
-    /// Blocks on getting a bundle.
     pub fn recv(
         &mut self,
         bank: &Arc<Bank>,
@@ -92,7 +110,8 @@ impl BundleScheduler {
                         Entry::Vacant(_) => None,
                     };
                     if let Some(new_locks) = maybe_new_locks {
-                        self.remove_locks(self.tx_to_accounts.get(tx.signature()).unwrap());
+                        let thing = self.tx_to_accounts.get(tx.signature()).unwrap().clone();
+                        self.remove_locks(&thing);
 
                         self.tx_to_accounts
                             .insert(*tx.signature(), new_locks.clone());
@@ -110,18 +129,12 @@ impl BundleScheduler {
     }
 
     /// Unlocks the pre-lock accounts in this batch. This should be called from bundle_stage.
-    /// THIS MUST BE CALLED NO MATTER WHAT!
-    /// TODO: use SanitizedBundle here
-    pub fn unlock(&mut self, batch: &[SanitizedTransaction]) {
-        for tx in batch {
-            match self.tx_to_accounts.get(tx.signature()) {
-                None => {
-                    error!("transaction not present in locks map!!!");
-                }
-                Some(accounts) => {
-                    self.remove_locks(accounts);
-                    // TODO: remove signature from tx_to_accounts
-                }
+    pub fn unlock(&mut self, bundle: SanitizedBundle) {
+        for tx in bundle.transactions {
+            let accounts = self.tx_to_accounts.get(tx.signature()).cloned();
+            if let Some(accounts) = accounts {
+                self.remove_locks(&accounts);
+                self.tx_to_accounts.remove(tx.signature());
             }
         }
         // TODO
@@ -130,16 +143,30 @@ impl BundleScheduler {
     }
 
     /// Runs list of sanitized transactions by to determine if they're pre-locked
-    pub fn get_lock_results(&mut self, transactions: &[SanitizedTransaction]) {}
+    pub fn get_lock_results(
+        &self,
+        transactions: &[SanitizedTransaction],
+    ) -> Vec<transaction::Result<()>> {
+        transactions
+            .iter()
+            .map(|tx| {
+                for acc in tx.message.account_keys().iter() {
+                    if self.account_locks.contains_key(acc) {
+                        return Err(TransactionError::AccountInUse);
+                    }
+                }
+                Ok(())
+            })
+            .collect()
+    }
 
     fn prelock_bundle_accounts(
         &mut self,
         batches: &[BundlePacketBatch],
         bank: &Arc<Bank>,
         tip_program_id: &Pubkey,
-    ) -> Result<(), TransactionError> {
+    ) {
         for batch in batches {
-            // todo: move the check below to a Result<Vec<SanitizedTransaction>, TransactionError>
             let transactions = Self::get_bundle_txs(&batch, bank, tip_program_id);
             if transactions.is_empty() || batch.batch.packets.len() != transactions.len() {
                 warn!(
@@ -167,10 +194,10 @@ impl BundleScheduler {
             }
 
             self.add_locks(&transactions_locks);
-
-            // TODO: insert into tx_to_accounts
+            for (tx, locks) in transactions.into_iter().zip(transactions_locks.into_iter()) {
+                self.tx_to_accounts.insert(*tx.signature(), locks);
+            }
         }
-        Ok(())
     }
 
     fn add_locks(&mut self, transactions_locks: &[HashSet<Pubkey>]) {
@@ -235,15 +262,9 @@ impl BundleScheduler {
             };
 
             if let Ok(batches) = batches {
-                match self.prelock_bundle_accounts(&batches, bank, tip_program_id) {
-                    Ok(_) => {
-                        if let Err(e) = self.locked_bundle_sender.send(batches) {
-                            error!("error sending packet into locked bundle queue e: {}", e);
-                        }
-                    }
-                    Err(e) => {
-                        error!("error pre-locking accounts: {}", e);
-                    }
+                self.prelock_bundle_accounts(&batches, bank, tip_program_id);
+                if let Err(e) = self.locked_bundle_sender.send(batches) {
+                    error!("error sending packet into locked bundle queue e: {}", e);
                 }
             } else {
                 break;
@@ -280,7 +301,7 @@ impl BundleScheduler {
     #[allow(clippy::needless_collect)]
     fn transaction_from_deserialized_packet(
         deserialized_packet: &ImmutableDeserializedPacket,
-        feature_set: &Arc<feature_set::FeatureSet>,
+        feature_set: &Arc<FeatureSet>,
         votes_only: bool,
         address_loader: impl AddressLoader,
         tip_program_id: &Pubkey,
@@ -319,5 +340,22 @@ impl BundleScheduler {
             .filter(|(_, pkt)| !pkt.meta.discard())
             .map(|(index, _)| index)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use solana_sdk::{
+        hash::Hash,
+        signature::{Keypair, Signer},
+        system_transaction::transfer,
+    };
+
+    #[test]
+    fn test_scheduled() {
+        let kp1 = Keypair::new();
+        let kp2 = Keypair::new();
+        let tx0 = transfer(&kp1, &kp1.pubkey(), 1, Hash::default());
+        let tx1 = transfer(&kp2, &kp2.pubkey(), 1, Hash::default());
     }
 }
