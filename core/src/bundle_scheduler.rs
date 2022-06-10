@@ -68,6 +68,11 @@ impl BundleScheduler {
         }
     }
 
+    /// Receive a vector of sanitized bundles
+    /// NOTE: If a bundle contains a transaction that changes the addresses in lookup table
+    /// and then references that lookup table in a later transaction, the executed bundle will
+    /// return an invalid block. This is because we turn Packets to SanitizedTransactions at the
+    /// very beginning as opposed to iteratively converting Packets to SanitizedTransactions.
     pub fn recv(
         &mut self,
         bank: &Arc<Bank>,
@@ -129,17 +134,19 @@ impl BundleScheduler {
     }
 
     /// Unlocks the pre-lock accounts in this batch. This should be called from bundle_stage.
-    pub fn unlock(&mut self, bundle: SanitizedBundle) {
-        for tx in bundle.transactions {
+    pub fn unlock(&mut self, bundle: &SanitizedBundle) {
+        for tx in &bundle.transactions {
             let accounts = self.tx_to_accounts.get(tx.signature()).cloned();
             if let Some(accounts) = accounts {
                 self.remove_locks(&accounts);
                 self.tx_to_accounts.remove(tx.signature());
             }
         }
-        // TODO
-        //  if self.locked_bundle_receiver.is_empty
-        //  the sets account_locks and tx_to_locks shall be empty. should log an error if that happens.
+        if self.locked_bundle_receiver.is_empty() {
+            // TODO: remove asserts
+            assert!(self.tx_to_accounts.is_empty());
+            assert!(self.account_locks.is_empty());
+        }
     }
 
     /// Runs list of sanitized transactions by to determine if they're pre-locked
@@ -345,17 +352,51 @@ impl BundleScheduler {
 
 #[cfg(test)]
 mod test {
-    use solana_sdk::{
-        hash::Hash,
-        signature::{Keypair, Signer},
-        system_transaction::transfer,
+    use {
+        crate::bundle_scheduler::BundleScheduler,
+        bincode::serialize,
+        crossbeam_channel::unbounded,
+        solana_mev::bundle::BundlePacketBatch,
+        solana_perf::packet::PacketBatch,
+        solana_runtime::bank::Bank,
+        solana_sdk::{
+            hash::Hash,
+            packet::Packet,
+            signature::{Keypair, Signer},
+            system_transaction::transfer,
+            transaction::VersionedTransaction,
+        },
+        std::sync::Arc,
     };
 
     #[test]
-    fn test_scheduled() {
+    fn test_get_bundle() {
+        let tip_program = Keypair::new().pubkey();
+        let bank = Arc::new(Bank::default_for_tests());
+
         let kp1 = Keypair::new();
         let kp2 = Keypair::new();
-        let tx0 = transfer(&kp1, &kp1.pubkey(), 1, Hash::default());
-        let tx1 = transfer(&kp2, &kp2.pubkey(), 1, Hash::default());
+        let tx0 = VersionedTransaction::from(transfer(&kp1, &kp1.pubkey(), 1, Hash::default()));
+        let tx1 = VersionedTransaction::from(transfer(&kp2, &kp2.pubkey(), 1, Hash::default()));
+
+        let (bundle_packet_sender, bundle_packet_receiver) = unbounded();
+        let mut scheduler = BundleScheduler::new(bundle_packet_receiver);
+
+        let batch = BundlePacketBatch {
+            batch: PacketBatch::new(vec![
+                Packet::from_data(None, &tx0).unwrap(),
+                Packet::from_data(None, &tx1).unwrap(),
+            ]),
+        };
+
+        bundle_packet_sender.send(vec![batch]).unwrap();
+
+        let bundles = scheduler.recv(&bank, &tip_program).unwrap();
+        assert_eq!(bundles.len(), 1);
+        assert_eq!(*bundles[0].transactions[0].signature(), tx0.signatures[0]);
+        assert_eq!(*bundles[0].transactions[1].signature(), tx1.signatures[0]);
+        for bundle in bundles {
+            scheduler.unlock(&bundle);
+        }
     }
 }

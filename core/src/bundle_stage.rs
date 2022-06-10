@@ -4,6 +4,7 @@
 use {
     crate::{
         banking_stage::BatchedTransactionDetails,
+        bundle_scheduler::BundleScheduler,
         leader_slot_banking_stage_timing_metrics::LeaderExecuteAndCommitTimings,
         qos_service::{CommitTransactionDetails, QosService},
         unprocessed_packet_batches::{self, *},
@@ -84,7 +85,7 @@ impl BundleStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: ReplayVoteSender,
         cost_model: Arc<RwLock<CostModel>>,
-        bundle_receiver: Receiver<Vec<BundlePacketBatch>>,
+        bundle_scheduler: BundleScheduler,
         exit: Arc<AtomicBool>,
         tip_manager: Arc<Mutex<TipManager>>,
     ) -> Self {
@@ -94,7 +95,7 @@ impl BundleStage {
             transaction_status_sender,
             gossip_vote_sender,
             cost_model,
-            bundle_receiver,
+            bundle_scheduler,
             exit,
             tip_manager,
         )
@@ -107,7 +108,7 @@ impl BundleStage {
         transaction_status_sender: Option<TransactionStatusSender>,
         gossip_vote_sender: ReplayVoteSender,
         cost_model: Arc<RwLock<CostModel>>,
-        bundle_receiver: Receiver<Vec<BundlePacketBatch>>,
+        bundle_scheduler: BundleScheduler,
         exit: Arc<AtomicBool>,
         tip_manager: Arc<Mutex<TipManager>>,
     ) -> Self {
@@ -122,7 +123,7 @@ impl BundleStage {
                     cluster_info,
                     &poh_recorder,
                     transaction_status_sender,
-                    bundle_receiver,
+                    bundle_scheduler,
                     gossip_vote_sender,
                     0,
                     cost_model,
@@ -917,7 +918,7 @@ impl BundleStage {
         cluster_info: Arc<ClusterInfo>,
         poh_recorder: &Arc<Mutex<PohRecorder>>,
         transaction_status_sender: Option<TransactionStatusSender>,
-        bundle_receiver: Receiver<Vec<BundlePacketBatch>>,
+        bundle_scheduler: BundleScheduler,
         gossip_vote_sender: ReplayVoteSender,
         id: u32,
         cost_model: Arc<RwLock<CostModel>>,

@@ -241,7 +241,7 @@ impl Tpu {
             transaction_status_sender,
             replay_vote_sender,
             cost_model.clone(),
-            bundle_receiver,
+            bundle_scheduler,
             exit.clone(),
             tip_manager,
         );
