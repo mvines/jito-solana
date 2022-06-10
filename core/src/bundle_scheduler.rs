@@ -91,6 +91,7 @@ impl BundleScheduler {
                         "error deserializing packets, throwing bundle away e: {:?}",
                         packet_batch
                     );
+                    // TODO (LB): what if it previously was considered a TX but isn't now?
                     for tx in transactions {
                         // ensure we drop locks if we're dropping bundles too
                         if let Some(locks) = self.tx_to_accounts.remove(tx.signature()) {
