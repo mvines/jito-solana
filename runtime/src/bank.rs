@@ -689,7 +689,6 @@ impl TransactionExecutionResult {
     }
 }
 
-#[derive(Debug)]
 pub struct LoadAndExecuteTransactionsOutput {
     pub loaded_transactions: Vec<TransactionLoadResult>,
     // Vector of results indicating whether a transaction was executed or could not
@@ -3870,26 +3869,12 @@ impl Bank {
         transactions: &'b [SanitizedTransaction],
         transaction_results: impl Iterator<Item = &'b Result<()>>,
     ) -> TransactionBatch<'a, 'b> {
-        // this lock_results could be: Ok, AccountInUse, AccountLoadedTwice or TooManyAccountLocks
+        // this lock_results could be: Ok, AccountInUse, WouldExceedBlockMaxLimit or WouldExceedAccountMaxLimit
         let lock_results = self.rc.accounts.lock_accounts_with_results(
             transactions.iter(),
             transaction_results,
             &self.feature_set,
         );
-        TransactionBatch::new(lock_results, self, Cow::Borrowed(transactions))
-    }
-
-    /// Prepare a locked transaction batch from a list of sanitized transactions, and their cost
-    /// limited packing status, where transactions will be locked sequentially until the first failure
-    pub fn prepare_sequential_sanitized_batch_with_results<'a, 'b>(
-        &'a self,
-        transactions: &'b [SanitizedTransaction],
-    ) -> TransactionBatch<'a, 'b> {
-        // this lock_results could be: Ok, AccountInUse, BundleNotContinuous, AccountLoadedTwice, or TooManyAccountLocks
-        let lock_results = self
-            .rc
-            .accounts
-            .lock_accounts_sequential_with_results(transactions.iter(), &self.feature_set);
         TransactionBatch::new(lock_results, self, Cow::Borrowed(transactions))
     }
 
@@ -4992,31 +4977,6 @@ impl Bank {
             execution_results,
             rent_debits,
         }
-    }
-
-    // TODO: @buffalu_ check
-    pub fn collect_accounts_to_store<'a>(
-        &self,
-        txs: &'a [SanitizedTransaction],
-        res: &'a [TransactionExecutionResult],
-        loaded: &'a mut [TransactionLoadResult],
-    ) -> Vec<(&'a Pubkey, &'a AccountSharedData)> {
-        let (blockhash, lamports_per_signature) = self.last_blockhash_and_lamports_per_signature();
-        let durable_nonce = {
-            let separate_nonce_from_blockhash = self.separate_nonce_from_blockhash();
-            let durable_nonce =
-                DurableNonce::from_blockhash(&blockhash, separate_nonce_from_blockhash);
-            (durable_nonce, separate_nonce_from_blockhash)
-        };
-        Accounts::collect_accounts_to_store(
-            txs,
-            res,
-            loaded,
-            &self.rent_collector,
-            &durable_nonce,
-            lamports_per_signature,
-            self.leave_nonce_on_success(),
-        ).0
     }
 
     // Distribute collected rent fees for this slot to staked validators (excluding stakers)

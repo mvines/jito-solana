@@ -7,7 +7,6 @@ use {
         leader_slot_banking_stage_timing_metrics::{
             LeaderExecuteAndCommitTimings, RecordTransactionsTimings,
         },
-        sigverify::SigverifyTracerPacketStats,
         tracer_packet_stats::TracerPacketStats,
         qos_service::{CommitTransactionDetails, QosService},
         unprocessed_packet_batches::{self, *},
@@ -80,7 +79,7 @@ use {
         time::{Duration, Instant},
     },
 };
-use solana_perf::packet::{BankingPacketBatch, TransactionTracerPacketStats};
+use solana_perf::packet::{BankingPacketBatch, SigverifyTracerPacketStats, TransactionTracerPacketStats};
 
 /// Transaction forwarding
 pub const FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET: u64 = 2;
@@ -1270,7 +1269,7 @@ impl BankingStage {
                 };
 
                 let pre_token_balances = if transaction_status_sender.is_some() {
-                    collect_token_balances(bank, batch, &mut mint_decimals, None)
+                    collect_token_balances(bank, batch, &mut mint_decimals)
                 } else {
                     vec![]
                 };
@@ -1413,7 +1412,7 @@ impl BankingStage {
                         let txs = batch.sanitized_transactions().to_vec();
                         let post_balances = bank.collect_balances(batch);
                         let post_token_balances =
-                            collect_token_balances(bank, batch, &mut mint_decimals, None);
+                            collect_token_balances(bank, batch, &mut mint_decimals);
                         transaction_status_sender.send_transaction_status_batch(
                             bank.clone(),
                             txs,

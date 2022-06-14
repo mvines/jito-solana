@@ -9,14 +9,13 @@ pub use solana_perf::sigverify::{
 };
 use {
     crate::{
-        banking_stage::BankingPacketBatch,
         sigverify_stage::{SigVerifier, SigVerifyServiceError},
     },
     crossbeam_channel::Sender,
     solana_perf::{cuda_runtime::PinnedVec, packet::PacketBatch, recycler::Recycler, sigverify},
     solana_sdk::{packet::Packet, saturating_add_assign},
 };
-use solana_perf::packet::{SigverifyTracerPacketStats, TransactionTracerPacketStats};
+use solana_perf::packet::{BankingPacketBatch, SigverifyTracerPacketStats, TransactionTracerPacketStats};
 
 
 #[derive(Clone)]

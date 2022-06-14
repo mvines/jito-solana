@@ -47,7 +47,7 @@ use {
         },
     },
     solana_transaction_status::token_balances::{
-        collect_balances_with_cache, collect_token_balances, TransactionTokenBalances,
+        collect_token_balances, TransactionTokenBalances,
         TransactionTokenBalancesSet,
     },
     std::{
@@ -257,282 +257,282 @@ impl BundleStage {
         qos_service: &QosService,
         tip_manager: &Arc<Mutex<TipManager>>,
     ) -> BundleExecutionResult<()> {
-        let mut chunk_start = 0;
-
-        let mut execute_and_commit_timings = LeaderExecuteAndCommitTimings::default();
-        let mut account_override = AccountOverrides {
-            slot_history: None,
-            cached_accounts_with_rent: HashMap::with_capacity(20),
-        };
-
-        let mut execution_results = Vec::new();
-        let mut mint_decimals: HashMap<Pubkey, u8> = HashMap::new();
-
-        let tip_program_id = tip_manager.lock().unwrap().program_id();
-        let tip_pdas = tip_manager.lock().unwrap().get_tip_accounts();
-
-        // ************************************************************************
-        // Ensure validator is leader according to PoH
-        // ************************************************************************
-        let poh_recorder_bank = poh_recorder.lock().unwrap().get_poh_recorder_bank();
-        let working_bank_start = poh_recorder_bank.working_bank_start();
-        if PohRecorder::get_working_bank_if_not_expired(&working_bank_start).is_none() {
-            return Err(BundleExecutionError::NotLeaderYet);
-        }
-
-        let BankStart {
-            working_bank: bank,
-            bank_creation_time,
-        } = &*working_bank_start.unwrap();
-
-        let transactions = Self::get_bundle_txs(&bundle, bank, &tip_program_id);
-        if transactions.is_empty() || bundle.batch.packets.len() != transactions.len() {
-            return Err(BundleExecutionError::InvalidBundle);
-        }
-
-        // ************************************************************************
-        // Quality-of-service and block size check
-        // ************************************************************************
-        let tx_costs = qos_service.compute_transaction_costs(transactions.iter());
-        let (transactions_qos_results, num_included) =
-            qos_service.select_transactions_per_cost(transactions.iter(), tx_costs.iter(), bank);
-
-        // qos rate-limited a tx in here, drop the bundle
-        if transactions.len().saturating_sub(num_included) > 0 {
-            return Err(BundleExecutionError::ExceedsCostModel);
-        }
-
-        qos_service.accumulate_estimated_transaction_costs(
-            &Self::accumulate_batched_transaction_costs(
-                tx_costs.iter(),
-                transactions_qos_results.iter(),
-            ),
-        );
-
-        if Self::bundle_touches_tip_pdas(&transactions, &tip_pdas) {
-            // NOTE: ensure that tip_manager locked while TX is executing to avoid any race conditions with bundle_stage
-            // writing to the account
-            let tip_manager_l = tip_manager.lock().unwrap();
-            // TODO: remove initializing the tip program when done testing
-            Self::maybe_initialize_config_account(
-                bank,
-                &tip_manager_l,
-                qos_service,
-                recorder,
-                transaction_status_sender,
-                &mut execute_and_commit_timings,
-                gossip_vote_sender,
-                cluster_info,
-            )?;
-            Self::maybe_change_tip_receiver(
-                bank,
-                &tip_manager_l,
-                qos_service,
-                recorder,
-                transaction_status_sender,
-                &mut execute_and_commit_timings,
-                gossip_vote_sender,
-                cluster_info,
-            )?;
-        }
-
-        while chunk_start != transactions.len() {
-            if !Bank::should_bank_still_be_processing_txs(bank_creation_time, bank.ns_per_slot) {
-                QosService::remove_transaction_costs(
-                    tx_costs.iter(),
-                    transactions_qos_results.iter(),
-                    bank,
-                );
-                return Err(BundleExecutionError::PohMaxHeightError);
-            }
-
-            // ************************************************************************
-            // Build a TransactionBatch that ensures transactions in the bundle
-            // are executed sequentially.
-            // ************************************************************************
-            let chunk_end = std::cmp::min(transactions.len(), chunk_start + 128);
-            let chunk = &transactions[chunk_start..chunk_end];
-            let batch = bank.prepare_sequential_sanitized_batch_with_results(chunk);
-            if let Some((e, _)) = check_bundle_lock_results(&batch.lock_results()) {
-                QosService::remove_transaction_costs(
-                    tx_costs.iter(),
-                    transactions_qos_results.iter(),
-                    bank,
-                );
-                return Err(e);
-            }
-
-            let ((pre_balances, pre_token_balances), _) = measure!(
-                Self::collect_balances(
-                    bank,
-                    &batch,
-                    &account_override,
-                    transaction_status_sender,
-                    &mut mint_decimals,
-                ),
-                "collect_balances",
-            );
-
-            let (mut load_and_execute_transactions_output, load_execute_time) = measure!(
-                    bank.load_and_execute_transactions(
-                        &batch,
-                        MAX_PROCESSING_AGE,
-                        transaction_status_sender.is_some(),
-                        transaction_status_sender.is_some(),
-                        transaction_status_sender.is_some(),
-                        &mut execute_and_commit_timings.execute_timings,
-                        Some(&account_override),
-                    ),
-                "load_execute",
-            );
-            execute_and_commit_timings.load_execute_us = load_execute_time.as_us();
-
-            if let Err(e) = Self::check_all_executed_ok(
-                &load_and_execute_transactions_output
-                    .execution_results
-                    .as_slice(),
-            ) {
-                QosService::remove_transaction_costs(
-                    tx_costs.iter(),
-                    transactions_qos_results.iter(),
-                    bank,
-                );
-                return Err(e);
-            }
-
-            // *********************************************************************************
-            // Cache results so next iterations of bundle execution can load cached state
-            // instead of using AccountsDB which contains stale execution data.
-            // *********************************************************************************
-            Self::cache_accounts(
-                bank,
-                &batch.sanitized_transactions(),
-                &load_and_execute_transactions_output.execution_results,
-                &mut load_and_execute_transactions_output.loaded_transactions,
-                &mut account_override,
-            );
-
-            let ((post_balances, post_token_balances), _) = measure!(
-                    Self::collect_balances(
-                        bank,
-                        &batch,
-                        &account_override,
-                        transaction_status_sender,
-                        &mut mint_decimals,
-                    ),
-                "collect_balances",
-            );
-
-            execution_results.push(AllExecutionResults {
-                load_and_execute_tx_output: load_and_execute_transactions_output,
-                sanitized_txs: batch.sanitized_transactions().to_vec(),
-                pre_balances: (pre_balances, pre_token_balances),
-                post_balances: (post_balances, post_token_balances),
-            });
-
-            // start at the next available transaction in the batch that threw an error
-            let processing_end = batch.lock_results().iter().position(|lr| lr.is_err());
-            if let Some(end) = processing_end {
-                chunk_start += end;
-            } else {
-                chunk_start = chunk_end;
-            }
-
-            drop(batch);
-        }
-
-        assert!(!execution_results.is_empty());
-
-        // *********************************************************************************
-        // All transactions are executed in the bundle.
-        // Record to PoH and send the saved execution results to the Bank.
-        // Note: Ensure that bank.commit_transactions is called on a per-batch basis and
-        // not all together
-        // *********************************************************************************
-
-        let (freeze_lock, _freeze_lock_time) = measure!(bank.freeze_lock(), "freeze_lock");
-
-        let record = Self::prepare_poh_record_bundle(&bank.slot(), &execution_results);
-        Self::try_record(recorder, record).map_err(|e| {
-            QosService::remove_transaction_costs(
-                tx_costs.iter(),
-                transactions_qos_results.iter(),
-                bank,
-            );
-            e
-        })?;
-
-        for r in execution_results {
-            let mut output = r.load_and_execute_tx_output;
-            let sanitized_txs = r.sanitized_txs;
-
-            // TODO: @buffalu_ double check: e66ea7cb6ac1b9881b11c81ecfec287af6a59754
-            let (last_blockhash, lamports_per_signature) = bank.last_blockhash_and_lamports_per_signature();
-            let transaction_results = bank.commit_transactions(
-                &sanitized_txs,
-                &mut output.loaded_transactions,
-                output.execution_results.clone(),
-                last_blockhash,
-                lamports_per_signature,
-                CommitTransactionCounts{
-                    committed_transactions_count: output.executed_transactions_count as u64,
-                    committed_with_failure_result_count: output
-                        .executed_transactions_count
-                        .saturating_sub(output.executed_with_successful_result_count)
-                        as u64,
-                    signature_count: output.signature_count,
-                },
-                &mut execute_and_commit_timings.execute_timings,
-            );
-
-            let (_, _) = measure!({
-                    bank_utils::find_and_send_votes(
-                        &sanitized_txs,
-                        &transaction_results,
-                        Some(gossip_vote_sender),
-                    );
-                    if let Some(transaction_status_sender) = transaction_status_sender {
-                        transaction_status_sender.send_transaction_status_batch(
-                            bank.clone(),
-                            sanitized_txs,
-                            output.execution_results,
-                            TransactionBalancesSet::new(r.pre_balances.0, r.post_balances.0),
-                            TransactionTokenBalancesSet::new(r.pre_balances.1, r.post_balances.1),
-                            transaction_results.rent_debits.clone(),
-                        );
-                    }
-                },
-                "find_and_send_votes",
-            );
-
-            let commit_transaction_statuses = transaction_results
-                .execution_results
-                .iter()
-                .map(|tx_results| match tx_results.details() {
-                    Some(details) => CommitTransactionDetails::Committed {
-                        compute_units: details.executed_units,
-                    },
-                    None => CommitTransactionDetails::NotCommitted,
-                })
-                .collect();
-
-            QosService::update_or_remove_transaction_costs(
-                tx_costs.iter(),
-                transactions_qos_results.iter(),
-                Some(&commit_transaction_statuses),
-                bank,
-            );
-            let (cu, us) = Self::accumulate_execute_units_and_time(
-                &execute_and_commit_timings.execute_timings,
-            );
-            qos_service.accumulate_actual_execute_cu(cu);
-            qos_service.accumulate_actual_execute_time(us);
-        }
-
-        // reports qos service stats for this batch
-        qos_service.report_metrics(bank.clone());
-
-        drop(freeze_lock);
+        // let mut chunk_start = 0;
+        //
+        // let mut execute_and_commit_timings = LeaderExecuteAndCommitTimings::default();
+        // let mut account_override = AccountOverrides {
+        //     slot_history: None,
+        //     cached_accounts_with_rent: HashMap::with_capacity(20),
+        // };
+        //
+        // let mut execution_results = Vec::new();
+        // let mut mint_decimals: HashMap<Pubkey, u8> = HashMap::new();
+        //
+        // let tip_program_id = tip_manager.lock().unwrap().program_id();
+        // let tip_pdas = tip_manager.lock().unwrap().get_tip_accounts();
+        //
+        // // ************************************************************************
+        // // Ensure validator is leader according to PoH
+        // // ************************************************************************
+        // let poh_recorder_bank = poh_recorder.lock().unwrap().get_poh_recorder_bank();
+        // let working_bank_start = poh_recorder_bank.working_bank_start();
+        // if PohRecorder::get_working_bank_if_not_expired(&working_bank_start).is_none() {
+        //     return Err(BundleExecutionError::NotLeaderYet);
+        // }
+        //
+        // let BankStart {
+        //     working_bank: bank,
+        //     bank_creation_time,
+        // } = &*working_bank_start.unwrap();
+        //
+        // let transactions = Self::get_bundle_txs(&bundle, bank, &tip_program_id);
+        // if transactions.is_empty() || bundle.batch.packets.len() != transactions.len() {
+        //     return Err(BundleExecutionError::InvalidBundle);
+        // }
+        //
+        // // ************************************************************************
+        // // Quality-of-service and block size check
+        // // ************************************************************************
+        // let tx_costs = qos_service.compute_transaction_costs(transactions.iter());
+        // let (transactions_qos_results, num_included) =
+        //     qos_service.select_transactions_per_cost(transactions.iter(), tx_costs.iter(), bank);
+        //
+        // // qos rate-limited a tx in here, drop the bundle
+        // if transactions.len().saturating_sub(num_included) > 0 {
+        //     return Err(BundleExecutionError::ExceedsCostModel);
+        // }
+        //
+        // qos_service.accumulate_estimated_transaction_costs(
+        //     &Self::accumulate_batched_transaction_costs(
+        //         tx_costs.iter(),
+        //         transactions_qos_results.iter(),
+        //     ),
+        // );
+        //
+        // if Self::bundle_touches_tip_pdas(&transactions, &tip_pdas) {
+        //     // NOTE: ensure that tip_manager locked while TX is executing to avoid any race conditions with bundle_stage
+        //     // writing to the account
+        //     let tip_manager_l = tip_manager.lock().unwrap();
+        //     // TODO: remove initializing the tip program when done testing
+        //     Self::maybe_initialize_config_account(
+        //         bank,
+        //         &tip_manager_l,
+        //         qos_service,
+        //         recorder,
+        //         transaction_status_sender,
+        //         &mut execute_and_commit_timings,
+        //         gossip_vote_sender,
+        //         cluster_info,
+        //     )?;
+        //     Self::maybe_change_tip_receiver(
+        //         bank,
+        //         &tip_manager_l,
+        //         qos_service,
+        //         recorder,
+        //         transaction_status_sender,
+        //         &mut execute_and_commit_timings,
+        //         gossip_vote_sender,
+        //         cluster_info,
+        //     )?;
+        // }
+        //
+        // while chunk_start != transactions.len() {
+        //     if !Bank::should_bank_still_be_processing_txs(bank_creation_time, bank.ns_per_slot) {
+        //         QosService::remove_transaction_costs(
+        //             tx_costs.iter(),
+        //             transactions_qos_results.iter(),
+        //             bank,
+        //         );
+        //         return Err(BundleExecutionError::PohMaxHeightError);
+        //     }
+        //
+        //     // ************************************************************************
+        //     // Build a TransactionBatch that ensures transactions in the bundle
+        //     // are executed sequentially.
+        //     // ************************************************************************
+        //     let chunk_end = std::cmp::min(transactions.len(), chunk_start + 128);
+        //     let chunk = &transactions[chunk_start..chunk_end];
+        //     let batch = bank.prepare_sequential_sanitized_batch_with_results(chunk);
+        //     if let Some((e, _)) = check_bundle_lock_results(&batch.lock_results()) {
+        //         QosService::remove_transaction_costs(
+        //             tx_costs.iter(),
+        //             transactions_qos_results.iter(),
+        //             bank,
+        //         );
+        //         return Err(e);
+        //     }
+        //
+        //     let ((pre_balances, pre_token_balances), _) = measure!(
+        //         Self::collect_balances(
+        //             bank,
+        //             &batch,
+        //             &account_override,
+        //             transaction_status_sender,
+        //             &mut mint_decimals,
+        //         ),
+        //         "collect_balances",
+        //     );
+        //
+        //     let (mut load_and_execute_transactions_output, load_execute_time) = measure!(
+        //             bank.load_and_execute_transactions(
+        //                 &batch,
+        //                 MAX_PROCESSING_AGE,
+        //                 transaction_status_sender.is_some(),
+        //                 transaction_status_sender.is_some(),
+        //                 transaction_status_sender.is_some(),
+        //                 &mut execute_and_commit_timings.execute_timings,
+        //                 Some(&account_override),
+        //             ),
+        //         "load_execute",
+        //     );
+        //     execute_and_commit_timings.load_execute_us = load_execute_time.as_us();
+        //
+        //     if let Err(e) = Self::check_all_executed_ok(
+        //         &load_and_execute_transactions_output
+        //             .execution_results
+        //             .as_slice(),
+        //     ) {
+        //         QosService::remove_transaction_costs(
+        //             tx_costs.iter(),
+        //             transactions_qos_results.iter(),
+        //             bank,
+        //         );
+        //         return Err(e);
+        //     }
+        //
+        //     // *********************************************************************************
+        //     // Cache results so next iterations of bundle execution can load cached state
+        //     // instead of using AccountsDB which contains stale execution data.
+        //     // *********************************************************************************
+        //     Self::cache_accounts(
+        //         bank,
+        //         &batch.sanitized_transactions(),
+        //         &load_and_execute_transactions_output.execution_results,
+        //         &mut load_and_execute_transactions_output.loaded_transactions,
+        //         &mut account_override,
+        //     );
+        //
+        //     let ((post_balances, post_token_balances), _) = measure!(
+        //             Self::collect_balances(
+        //                 bank,
+        //                 &batch,
+        //                 &account_override,
+        //                 transaction_status_sender,
+        //                 &mut mint_decimals,
+        //             ),
+        //         "collect_balances",
+        //     );
+        //
+        //     execution_results.push(AllExecutionResults {
+        //         load_and_execute_tx_output: load_and_execute_transactions_output,
+        //         sanitized_txs: batch.sanitized_transactions().to_vec(),
+        //         pre_balances: (pre_balances, pre_token_balances),
+        //         post_balances: (post_balances, post_token_balances),
+        //     });
+        //
+        //     // start at the next available transaction in the batch that threw an error
+        //     let processing_end = batch.lock_results().iter().position(|lr| lr.is_err());
+        //     if let Some(end) = processing_end {
+        //         chunk_start += end;
+        //     } else {
+        //         chunk_start = chunk_end;
+        //     }
+        //
+        //     drop(batch);
+        // }
+        //
+        // assert!(!execution_results.is_empty());
+        //
+        // // *********************************************************************************
+        // // All transactions are executed in the bundle.
+        // // Record to PoH and send the saved execution results to the Bank.
+        // // Note: Ensure that bank.commit_transactions is called on a per-batch basis and
+        // // not all together
+        // // *********************************************************************************
+        //
+        // let (freeze_lock, _freeze_lock_time) = measure!(bank.freeze_lock(), "freeze_lock");
+        //
+        // let record = Self::prepare_poh_record_bundle(&bank.slot(), &execution_results);
+        // Self::try_record(recorder, record).map_err(|e| {
+        //     QosService::remove_transaction_costs(
+        //         tx_costs.iter(),
+        //         transactions_qos_results.iter(),
+        //         bank,
+        //     );
+        //     e
+        // })?;
+        //
+        // for r in execution_results {
+        //     let mut output = r.load_and_execute_tx_output;
+        //     let sanitized_txs = r.sanitized_txs;
+        //
+        //     // TODO: @buffalu_ double check: e66ea7cb6ac1b9881b11c81ecfec287af6a59754
+        //     let (last_blockhash, lamports_per_signature) = bank.last_blockhash_and_lamports_per_signature();
+        //     let transaction_results = bank.commit_transactions(
+        //         &sanitized_txs,
+        //         &mut output.loaded_transactions,
+        //         output.execution_results.clone(),
+        //         last_blockhash,
+        //         lamports_per_signature,
+        //         CommitTransactionCounts{
+        //             committed_transactions_count: output.executed_transactions_count as u64,
+        //             committed_with_failure_result_count: output
+        //                 .executed_transactions_count
+        //                 .saturating_sub(output.executed_with_successful_result_count)
+        //                 as u64,
+        //             signature_count: output.signature_count,
+        //         },
+        //         &mut execute_and_commit_timings.execute_timings,
+        //     );
+        //
+        //     let (_, _) = measure!({
+        //             bank_utils::find_and_send_votes(
+        //                 &sanitized_txs,
+        //                 &transaction_results,
+        //                 Some(gossip_vote_sender),
+        //             );
+        //             if let Some(transaction_status_sender) = transaction_status_sender {
+        //                 transaction_status_sender.send_transaction_status_batch(
+        //                     bank.clone(),
+        //                     sanitized_txs,
+        //                     output.execution_results,
+        //                     TransactionBalancesSet::new(r.pre_balances.0, r.post_balances.0),
+        //                     TransactionTokenBalancesSet::new(r.pre_balances.1, r.post_balances.1),
+        //                     transaction_results.rent_debits.clone(),
+        //                 );
+        //             }
+        //         },
+        //         "find_and_send_votes",
+        //     );
+        //
+        //     let commit_transaction_statuses = transaction_results
+        //         .execution_results
+        //         .iter()
+        //         .map(|tx_results| match tx_results.details() {
+        //             Some(details) => CommitTransactionDetails::Committed {
+        //                 compute_units: details.executed_units,
+        //             },
+        //             None => CommitTransactionDetails::NotCommitted,
+        //         })
+        //         .collect();
+        //
+        //     QosService::update_or_remove_transaction_costs(
+        //         tx_costs.iter(),
+        //         transactions_qos_results.iter(),
+        //         Some(&commit_transaction_statuses),
+        //         bank,
+        //     );
+        //     let (cu, us) = Self::accumulate_execute_units_and_time(
+        //         &execute_and_commit_timings.execute_timings,
+        //     );
+        //     qos_service.accumulate_actual_execute_cu(cu);
+        //     qos_service.accumulate_actual_execute_time(us);
+        // }
+        //
+        // // reports qos service stats for this batch
+        // qos_service.report_metrics(bank.clone());
+        //
+        // drop(freeze_lock);
 
         Ok(())
     }
@@ -567,24 +567,24 @@ impl BundleStage {
         gossip_vote_sender: &ReplayVoteSender,
         cluster_info: &Arc<ClusterInfo>,
     ) -> BundleExecutionResult<()> {
-        if bank.get_account(&tip_manager_l.config_pubkey()).is_none() {
-            let init_tx =
-                tip_manager_l.build_initialize_tx(&bank.last_blockhash(), &cluster_info.keypair());
-            if let Err(e) = Self::execute_record_and_commit(
-                init_tx,
-                bank,
-                qos_service,
-                recorder,
-                transaction_status_sender,
-                execute_and_commit_timings,
-                gossip_vote_sender,
-            ) {
-                warn!("error initializing the tip program!!! error: {}", e);
-                return Err(e);
-            } else {
-                info!("initialized tip program");
-            }
-        }
+        // if bank.get_account(&tip_manager_l.config_pubkey()).is_none() {
+        //     let init_tx =
+        //         tip_manager_l.build_initialize_tx(&bank.last_blockhash(), &cluster_info.keypair());
+        //     if let Err(e) = Self::execute_record_and_commit(
+        //         init_tx,
+        //         bank,
+        //         qos_service,
+        //         recorder,
+        //         transaction_status_sender,
+        //         execute_and_commit_timings,
+        //         gossip_vote_sender,
+        //     ) {
+        //         warn!("error initializing the tip program!!! error: {}", e);
+        //         return Err(e);
+        //     } else {
+        //         info!("initialized tip program");
+        //     }
+        // }
         Ok(())
     }
 
@@ -598,33 +598,33 @@ impl BundleStage {
         gossip_vote_sender: &ReplayVoteSender,
         cluster_info: &Arc<ClusterInfo>,
     ) -> BundleExecutionResult<()> {
-        let current_tip_receiver = tip_manager_l.get_current_tip_receiver(&bank)?;
-        let my_kp = cluster_info.keypair();
-
-        if current_tip_receiver != my_kp.pubkey() {
-            match tip_manager_l.build_change_tip_receiver_tx(&my_kp.pubkey(), &bank, &my_kp) {
-                Ok(tx) => {
-                    if let Err(e) = Self::execute_record_and_commit(
-                        tx,
-                        bank,
-                        qos_service,
-                        recorder,
-                        transaction_status_sender,
-                        execute_and_commit_timings,
-                        gossip_vote_sender,
-                    ) {
-                        warn!("error changing tip receiver!!! error: {}", e);
-                        return Err(e);
-                    } else {
-                        info!("tip receiver changed!")
-                    }
-                }
-                Err(e) => {
-                    error!("error build tip tx! error: {:?}", e);
-                    return Err(e.into());
-                }
-            }
-        }
+        // let current_tip_receiver = tip_manager_l.get_current_tip_receiver(&bank)?;
+        // let my_kp = cluster_info.keypair();
+        //
+        // if current_tip_receiver != my_kp.pubkey() {
+        //     match tip_manager_l.build_change_tip_receiver_tx(&my_kp.pubkey(), &bank, &my_kp) {
+        //         Ok(tx) => {
+        //             if let Err(e) = Self::execute_record_and_commit(
+        //                 tx,
+        //                 bank,
+        //                 qos_service,
+        //                 recorder,
+        //                 transaction_status_sender,
+        //                 execute_and_commit_timings,
+        //                 gossip_vote_sender,
+        //             ) {
+        //                 warn!("error changing tip receiver!!! error: {}", e);
+        //                 return Err(e);
+        //             } else {
+        //                 info!("tip receiver changed!")
+        //             }
+        //         }
+        //         Err(e) => {
+        //             error!("error build tip tx! error: {:?}", e);
+        //             return Err(e.into());
+        //         }
+        //     }
+        // }
         Ok(())
     }
 
@@ -877,10 +877,10 @@ impl BundleStage {
         loaded: &mut [TransactionLoadResult],
         cached_accounts: &mut AccountOverrides,
     ) {
-        let accounts = bank.collect_accounts_to_store(txs, res, loaded);
-        for (pubkey, data) in accounts {
-            cached_accounts.put(*pubkey, data.clone());
-        }
+        // let accounts = bank.collect_accounts_to_store(txs, res, loaded);
+        // for (pubkey, data) in accounts {
+        //     cached_accounts.put(*pubkey, data.clone());
+        // }
     }
 
     fn collect_balances(
@@ -890,14 +890,14 @@ impl BundleStage {
         transaction_status_sender: &Option<TransactionStatusSender>,
         mint_decimals: &mut HashMap<Pubkey, u8>,
     ) -> (TransactionBalances, TransactionTokenBalances) {
-        if transaction_status_sender.is_some() {
-            let balances = collect_balances_with_cache(&batch, bank, Some(&cached_accounts));
-            let token_balances =
-                collect_token_balances(bank, &batch, mint_decimals, Some(&cached_accounts));
-            (balances, token_balances)
-        } else {
+        // if transaction_status_sender.is_some() {
+        //     let balances = collect_balances_with_cache(&batch, bank, Some(&cached_accounts));
+        //     let token_balances =
+        //         collect_token_balances(bank, &batch, mint_decimals, Some(&cached_accounts));
+        //     (balances, token_balances)
+        // } else {
             (vec![], vec![])
-        }
+        // }
     }
 
     /// Return an Error if a transaction was executed and reverted
