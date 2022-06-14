@@ -53,13 +53,12 @@ pub type ProxyResult<T> = std::result::Result<T, ProxyError>;
 /// Blocking interface to the validator interface server
 impl BlockingProxyClient {
     pub fn new(
-        validator_interface_address: String,
+        relayer_url: String,
         auth_interceptor: &AuthenticationInjector,
     ) -> ProxyResult<Self> {
         let rt = Builder::new_multi_thread().enable_all().build().unwrap();
-        let mut validator_interface_endpoint =
-            Endpoint::from_shared(validator_interface_address.clone())?;
-        if validator_interface_address.as_str().contains("https") {
+        let mut validator_interface_endpoint = Endpoint::from_shared(relayer_url.clone())?;
+        if relayer_url.as_str().contains("https") {
             let mut buf = Vec::new();
             File::open("/etc/ssl/certs/jito_ca.pem")?.read_to_end(&mut buf)?;
             validator_interface_endpoint = validator_interface_endpoint.tls_config(

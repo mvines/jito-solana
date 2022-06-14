@@ -19,7 +19,7 @@ use {
     crossbeam_channel::{bounded, unbounded, Receiver, RecvTimeoutError},
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::{blockstore::Blockstore, blockstore_processor::TransactionStatusSender},
-    solana_mev::{mev_stage::MevStage, tip_manager::TipManager},
+    solana_mev::{mev_stage::RelayerStage, tip_manager::TipManager},
     solana_poh::poh_recorder::{PohRecorder, WorkingBankEntry},
     solana_rpc::{
         optimistically_confirmed_bank_tracker::BankNotificationSender,
@@ -61,7 +61,7 @@ pub struct Tpu {
     fetch_stage: FetchStage,
     sigverify_stage: SigVerifyStage,
     vote_sigverify_stage: SigVerifyStage,
-    mev_stage: MevStage,
+    mev_stage: RelayerStage,
     banking_stage: BankingStage,
     cluster_info_vote_listener: ClusterInfoVoteListener,
     broadcast_stage: BroadcastStage,
@@ -190,7 +190,7 @@ impl Tpu {
 
         let (bundle_sender, bundle_receiver) = unbounded();
 
-        let mev_stage = MevStage::new(
+        let mev_stage = RelayerStage::new(
             cluster_info,
             validator_interface_address,
             verified_sender,

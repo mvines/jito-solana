@@ -32,7 +32,7 @@ use {
     tonic::Status,
 };
 
-pub struct MevStage {
+pub struct RelayerStage {
     _heartbeat_sender: Sender<HeartbeatEvent>,
     proxy_thread: JoinHandle<()>,
     heartbeat_thread: JoinHandle<()>,
@@ -65,12 +65,12 @@ type SubscribePacketsResult = std::result::Result<Option<SubscribePacketsRespons
 const HEARTBEAT_TIMEOUT_MS: Duration = Duration::from_millis(1500); // Empirically determined from load testing
 const DISCONNECT_DELAY_SEC: Duration = Duration::from_secs(60);
 const METRICS_CADENCE_SEC: Duration = Duration::from_secs(1);
-const METRICS_NAME: &str = "mev_stage";
+const METRICS_NAME: &str = "relayer_stage";
 
-impl MevStage {
+impl RelayerStage {
     pub fn new(
         cluster_info: &Arc<ClusterInfo>,
-        validator_interface_address: String,
+        relayer_url: String,
         verified_packet_sender: Sender<Vec<PacketBatch>>,
         bundle_sender: Sender<Vec<Bundle>>,
         packet_intercept_receiver: Receiver<PacketBatch>,
@@ -86,7 +86,7 @@ impl MevStage {
         let (heartbeat_sender, heartbeat_receiver) = unbounded();
 
         let proxy_thread = Self::spawn_proxy_thread(
-            validator_interface_address,
+            relayer_url,
             interceptor,
             verified_packet_sender,
             // if no validator interface address provided, sender side of the channel gets dropped
@@ -117,7 +117,7 @@ impl MevStage {
     }
 
     fn spawn_proxy_thread(
-        validator_interface_address: String,
+        relayer_url: String,
         interceptor: AuthenticationInjector,
         verified_packet_sender: Sender<Vec<PacketBatch>>,
         heartbeat_sender: Sender<HeartbeatEvent>,
@@ -127,7 +127,7 @@ impl MevStage {
         thread::Builder::new()
             .name("proxy_thread".into())
             .spawn(move || {
-                if !validator_interface_address.contains("http") {
+                if !relayer_url.contains("http") {
                     info!("malformed or missing mev proxy address provided, exiting mev loop");
                     datapoint_info!(METRICS_NAME, ("bad_proxy_addr", 1, i64));
                     return;
@@ -140,7 +140,7 @@ impl MevStage {
                         break;
                     }
                     if let Err(e) = Self::connect_and_stream(
-                        validator_interface_address.clone(),
+                        relayer_url.clone(),
                         &interceptor,
                         &heartbeat_sender,
                         &verified_packet_sender,
@@ -426,7 +426,7 @@ impl MevStage {
     }
 
     fn connect_and_stream(
-        validator_interface_address: String,
+        relayer_url: String,
         auth_interceptor: &AuthenticationInjector,
         heartbeat_sender: &Sender<HeartbeatEvent>,
         verified_packet_sender: &Sender<Vec<PacketBatch>>,
@@ -434,9 +434,8 @@ impl MevStage {
         bundle_sender: &Sender<Vec<Bundle>>,
         exit: &Arc<AtomicBool>,
     ) -> Result<()> {
-        let mut client =
-            BlockingProxyClient::new(validator_interface_address.clone(), auth_interceptor)?;
-        info!("connected to mev_proxy at {}", validator_interface_address);
+        let mut client = BlockingProxyClient::new(relayer_url.clone(), auth_interceptor)?;
+        info!("connected to mev_proxy at {}", relayer_url);
         let (tpu, tpu_fwd) = client.fetch_tpu_config()?;
 
         Self::stream_from_proxy(
