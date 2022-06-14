@@ -441,6 +441,7 @@ impl MevStage {
             BlockingProxyClient::new(validator_interface_address.clone(), auth_interceptor)?;
         info!("connected to mev_proxy at {}", validator_interface_address);
         let (tpu, tpu_fwd) = client.fetch_tpu_config()?;
+        info!("got tpu: {} tpu_fwd: {}", tpu, tpu_fwd);
 
         Self::stream_from_proxy(
             client,
