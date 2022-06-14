@@ -1,6 +1,6 @@
 use {
-    crate::proto::validator_interface::{
-        validator_interface_client::ValidatorInterfaceClient, GetTpuConfigsRequest,
+    crate::proto::relayer::{
+        relayer_service_client::RelayerServiceClient, GetTpuConfigsRequest,
         SubscribeBundlesRequest, SubscribeBundlesResponse, SubscribePacketsRequest,
         SubscribePacketsResponse,
     },
@@ -22,15 +22,14 @@ use {
     },
 };
 
-type ValidatorInterfaceClientType =
-    ValidatorInterfaceClient<InterceptedService<Channel, AuthenticationInjector>>;
+type RelayerClientType = RelayerServiceClient<InterceptedService<Channel, AuthenticationInjector>>;
 
 type SubscribePacketsReceiver =
     Receiver<std::result::Result<Option<SubscribePacketsResponse>, Status>>;
 
 pub struct BlockingProxyClient {
     rt: Runtime,
-    client: ValidatorInterfaceClientType,
+    client: RelayerClientType,
 }
 
 #[derive(Error, Debug)]
@@ -70,7 +69,7 @@ impl BlockingProxyClient {
             )?;
         }
         let channel = rt.block_on(validator_interface_endpoint.connect())?;
-        let client = ValidatorInterfaceClient::with_interceptor(channel, auth_interceptor.clone());
+        let client = RelayerServiceClient::with_interceptor(channel, auth_interceptor.clone());
         Ok(Self { rt, client })
     }
 

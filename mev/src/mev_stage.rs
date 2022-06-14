@@ -7,7 +7,7 @@ use {
         backoff::BackoffStrategy,
         blocking_proxy_client::{AuthenticationInjector, BlockingProxyClient, ProxyError},
         bundle::Bundle,
-        proto::validator_interface::{
+        proto::relayer::{
             subscribe_packets_response::Msg, SubscribeBundlesResponse, SubscribePacketsResponse,
         },
         proto_packet_to_packet,

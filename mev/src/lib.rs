@@ -23,8 +23,8 @@ pub mod proto {
         tonic::include_proto!("shared");
     }
 
-    pub mod validator_interface {
-        tonic::include_proto!("validator_interface");
+    pub mod relayer {
+        tonic::include_proto!("relayer");
     }
 }
 
