@@ -65,6 +65,7 @@ use {
         time::Duration,
     },
 };
+use solana_sdk::bundle::error::BundleExecutionError::NotLeaderYet;
 
 struct AllExecutionResults {
     pub load_and_execute_tx_output: LoadAndExecuteTransactionsOutput,
@@ -931,6 +932,7 @@ impl BundleStage {
     ) {
         let recorder = poh_recorder.lock().unwrap().recorder();
         let qos_service = QosService::new(cost_model, id);
+        let mut local_bundle_cache: Vec<Bundle> = Vec::new();
 
         let mut consensus_accounts_cache: HashSet<Pubkey> = HashSet::new();
         let mut last_consensus_update = Epoch::default();
@@ -943,6 +945,33 @@ impl BundleStage {
                 match bundle_receiver.recv_timeout(Duration::from_millis(100)) {
                     Ok(bundle) => bundle,
                     Err(RecvTimeoutError::Timeout) => {
+                        let mut next_cache = Vec::new();
+                        for cached_bundle in local_bundle_cache {
+                            let clone = cached_bundle.clone();
+                            match Self::execute_bundle(
+                                &cluster_info,
+                                cached_bundle,
+                                poh_recorder,
+                                &recorder,
+                                &transaction_status_sender,
+                                &gossip_vote_sender,
+                                &qos_service,
+                                &tip_manager,
+                                &mut consensus_accounts_cache,
+                                &mut last_consensus_update,
+                            ) {
+                                Ok(_) => {
+                                    info!("[bill] cache EXECUTED BUNDLE?!?!");
+                                }
+                                Err(e) => {
+                                    error!("[bill] cache error recording bundle {:?}", e);
+                                    if e == NotLeaderYet {
+                                        next_cache.push(clone);
+                                    }
+                                }
+                            }
+                        }
+                        local_bundle_cache = next_cache;
                         continue;
                     }
                     Err(RecvTimeoutError::Disconnected) => {
@@ -952,6 +981,7 @@ impl BundleStage {
             };
 
             for bundle in bundles {
+                let bundle_clone = bundle.clone();
                 match Self::execute_bundle(
                     &cluster_info,
                     bundle,
@@ -964,9 +994,14 @@ impl BundleStage {
                     &mut consensus_accounts_cache,
                     &mut last_consensus_update,
                 ) {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        info!("[bill] EXECUTED BUNDLE?!?!");
+                    }
                     Err(e) => {
-                        error!("error recording bundle {:?}", e);
+                        error!("[bill] error recording bundle {:?}", e);
+                        if e == NotLeaderYet {
+                            local_bundle_cache.push(bundle_clone);
+                        }
                     }
                 }
             }
