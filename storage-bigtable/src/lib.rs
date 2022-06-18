@@ -1,7 +1,7 @@
 #![allow(clippy::integer_arithmetic)]
 
 use {
-    crate::bigtable::RowKey,
+    crate::bigtable::{CellData, RowKey},
     log::*,
     serde::{Deserialize, Serialize},
     solana_metrics::inc_new_counter_debug,
@@ -26,7 +26,10 @@ use {
         convert::TryInto,
     },
     thiserror::Error,
-    tokio::task::JoinError,
+    tokio::{
+        sync::mpsc::{unbounded_channel, UnboundedReceiver},
+        task::JoinError,
+    },
 };
 
 #[macro_use]
@@ -472,6 +475,55 @@ impl LedgerStorage {
             )
             .await?;
         Ok(blocks.into_iter().filter_map(|s| key_to_slot(&s)).collect())
+    }
+
+    pub async fn stream_confirmed_blocks_with_data(
+        &self,
+        start_slot: Slot,
+        limit: usize,
+    ) -> Result<UnboundedReceiver<Result<(Slot, ConfirmedBlock)>>> {
+        // debug!(
+        //     "LedgerStorage::get_confirmed_blocks_with_data request received: {:?}",
+        //     slots
+        // );
+        inc_new_counter_debug!("storage-bigtable-query", 1);
+        let mut bigtable = self.connection.client();
+        let mut receiver: UnboundedReceiver<
+            std::result::Result<
+                (
+                    String,
+                    CellData<StoredConfirmedBlock, generated::ConfirmedBlock>,
+                ),
+                bigtable::Error,
+            >,
+        > = bigtable
+            .get_protobuf_or_bincode_cells_stream(
+                "blocks",
+                Some(slot_to_blocks_key(start_slot)),
+                None,
+                limit as i64,
+            )
+            .await?;
+
+        let (slots_blocks_sender, slots_blocks_receiver) = unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(Ok((row_key, block_cell_data))) = receiver.recv().await {
+                let block = match block_cell_data {
+                    CellData::Bincode(block) => block.into(),
+                    CellData::Protobuf(block) => block.try_into().unwrap(),
+                };
+                if slots_blocks_sender
+                    .send(Ok((key_to_slot(&row_key).unwrap(), block)))
+                    .is_err()
+                {
+                    error!("error streaming back block!");
+                    break;
+                }
+            }
+            warn!("dropping channel");
+        });
+
+        Ok(slots_blocks_receiver)
     }
 
     // Fetches and gets a vector of confirmed blocks via a multirow fetch

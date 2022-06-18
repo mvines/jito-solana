@@ -14,7 +14,7 @@ use {
         time::{Duration, Instant},
     },
     thiserror::Error,
-    tokio::sync::mpsc::unbounded_channel,
+    tokio::sync::mpsc::{unbounded_channel, Receiver, UnboundedReceiver},
     tonic::{codegen::InterceptedService, transport::ClientTlsConfig, Request, Status},
 };
 
@@ -484,26 +484,26 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     ) -> Result<Vec<(RowKey, RowData)>> {
         self.refresh_access_token().await;
 
-        let response = self
-            .client
-            .read_rows(ReadRowsRequest {
-                table_name: format!("{}{}", self.table_prefix, table_name),
-                rows_limit: 0, // return all keys
-                rows: Some(RowSet {
-                    row_keys: row_keys
-                        .iter()
-                        .map(|k| k.as_bytes().to_vec())
-                        .collect::<Vec<_>>(),
-                    row_ranges: vec![],
-                }),
-                filter: Some(RowFilter {
-                    // Only return the latest version of each cell
-                    filter: Some(row_filter::Filter::CellsPerColumnLimitFilter(1)),
-                }),
-                ..ReadRowsRequest::default()
-            })
-            .await?
-            .into_inner();
+        let req = ReadRowsRequest {
+            table_name: format!("{}{}", self.table_prefix, table_name),
+            rows_limit: 0, // return all keys
+            rows: Some(RowSet {
+                row_keys: row_keys
+                    .iter()
+                    .map(|k| k.as_bytes().to_vec())
+                    .collect::<Vec<_>>(),
+                row_ranges: vec![],
+            }),
+            filter: Some(RowFilter {
+                // Only return the latest version of each cell
+                filter: Some(row_filter::Filter::CellsPerColumnLimitFilter(1)),
+            }),
+            ..ReadRowsRequest::default()
+        };
+
+        info!("req: {:?}", req);
+
+        let response = self.client.read_rows(req).await?.into_inner();
 
         self.decode_read_rows_response(response).await
     }
@@ -683,112 +683,141 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         deserialize_protobuf_or_bincode_cell_data(&row_data, table, key)
     }
 
-    pub async fn get_protobuf_or_bincode_cells_stream<'a, B, P>(
+    pub async fn get_protobuf_or_bincode_cells_stream<B, P>(
         &mut self,
-        table: &'a str,
-        row_keys: impl IntoIterator<Item = RowKey>,
-    ) -> Result<impl Iterator<Item = (RowKey, CellData<B, P>)> + 'a>
+        table: &str,
+        start_at: Option<RowKey>,
+        end_at: Option<RowKey>,
+        rows_limit: i64,
+    ) -> Result<UnboundedReceiver<Result<(RowKey, CellData<B, P>)>>>
     where
-        B: serde::de::DeserializeOwned,
-        P: prost::Message + Default,
+        B: serde::de::DeserializeOwned + Send + 'static,
+        P: prost::Message + Default + 'static,
     {
         self.refresh_access_token().await;
 
         let (sender, receiver) = unbounded_channel();
 
-        let response = self
-            .client
-            .read_rows(ReadRowsRequest {
-                table_name: format!("{}{}", self.table_prefix, table_name),
-                rows_limit: 0, // return all keys
-                rows: Some(RowSet {
-                    row_keys: row_keys
-                        .iter()
-                        .map(|k| k.as_bytes().to_vec())
-                        .collect::<Vec<_>>(),
-                    row_ranges: vec![],
-                }),
-                filter: Some(RowFilter {
-                    // Only return the latest version of each cell
-                    filter: Some(row_filter::Filter::CellsPerColumnLimitFilter(1)),
-                }),
-                ..ReadRowsRequest::default()
-            })
-            .await?
-            .into_inner();
+        let req = ReadRowsRequest {
+            table_name: format!("{}{}", self.table_prefix, table),
+            rows_limit: rows_limit,
+            rows: Some(RowSet {
+                row_keys: vec![],
+                row_ranges: vec![RowRange {
+                    start_key: start_at
+                        .map(|row_key| row_range::StartKey::StartKeyClosed(row_key.into_bytes())),
+                    end_key: end_at
+                        .map(|row_key| row_range::EndKey::EndKeyClosed(row_key.into_bytes())),
+                }],
+            }),
+            filter: Some(RowFilter {
+                // Only return the latest version of each cell
+                filter: Some(row_filter::Filter::CellsPerColumnLimitFilter(1)),
+            }),
+            ..ReadRowsRequest::default()
+        };
 
-        // tokio::spawn(async move {
-        //     let mut cell_name = None;
-        //     let mut cell_timestamp = 0;
-        //     let mut cell_value = vec![];
-        //     let mut cell_version_ok = true;
-        //     let started = Instant::now();
-        //
-        //     while let Some(res) = response.message().await? {
-        //         if let Some(timeout) = self.timeout {
-        //             if Instant::now().duration_since(started) > timeout {
-        //                 return Err(Error::Timeout);
-        //             }
-        //         }
-        //         for (i, mut chunk) in res.chunks.into_iter().enumerate() {
-        //             // The comments for `read_rows_response::CellChunk` provide essential details for
-        //             // understanding how the below decoding works...
-        //             trace!("chunk {}: {:?}", i, chunk);
-        //
-        //             // Starting a new row?
-        //             if !chunk.row_key.is_empty() {
-        //                 row_key = String::from_utf8(chunk.row_key).ok(); // Require UTF-8 for row keys
-        //             }
-        //
-        //             // Starting a new cell?
-        //             if let Some(qualifier) = chunk.qualifier {
-        //                 if let Some(cell_name) = cell_name {
-        //                     row_data.push((cell_name, cell_value));
-        //                     cell_value = vec![];
-        //                 }
-        //                 cell_name = String::from_utf8(qualifier).ok(); // Require UTF-8 for cell names
-        //                 cell_timestamp = chunk.timestamp_micros;
-        //                 cell_version_ok = true;
-        //             } else {
-        //                 // Continuing the existing cell.  Check if this is the start of another version of the cell
-        //                 if chunk.timestamp_micros != 0 {
-        //                     if chunk.timestamp_micros < cell_timestamp {
-        //                         cell_version_ok = false; // ignore older versions of the cell
-        //                     } else {
-        //                         // newer version of the cell, remove the older cell
-        //                         cell_version_ok = true;
-        //                         cell_value = vec![];
-        //                         cell_timestamp = chunk.timestamp_micros;
-        //                     }
-        //                 }
-        //             }
-        //             if cell_version_ok {
-        //                 cell_value.append(&mut chunk.value);
-        //             }
-        //
-        //             // End of a row?
-        //             if chunk.row_status.is_some() {
-        //                 if let Some(read_rows_response::cell_chunk::RowStatus::CommitRow(_)) =
-        //                     chunk.row_status
-        //                 {
-        //                     if let Some(cell_name) = cell_name {
-        //                         row_data.push((cell_name, cell_value));
-        //                     }
-        //
-        //                     if let Some(row_key) = row_key {
-        //                         rows.push((row_key, row_data))
-        //                     }
-        //                 }
-        //
-        //                 row_key = None;
-        //                 row_data = vec![];
-        //                 cell_value = vec![];
-        //                 cell_name = None;
-        //             }
-        //         }
-        //     }
-        // });
-        Ok(iter::empty())
+        let mut response = self.client.read_rows(req).await?.into_inner();
+
+        let table = table.to_string();
+        tokio::spawn(async move {
+            let mut row_key = None;
+            let mut row_data = vec![];
+
+            let mut cell_name = None;
+            let mut cell_timestamp = 0;
+            let mut cell_value = vec![];
+            let mut cell_version_ok = true;
+
+            loop {
+                match response.message().await {
+                    Ok(res) => match res {
+                        None => {
+                            warn!("got none from response");
+                            break;
+                        }
+                        Some(rrr) => {
+                            for (i, mut chunk) in rrr.chunks.into_iter().enumerate() {
+                                // The comments for `read_rows_response::CellChunk` provide essential details for
+                                // understanding how the below decoding works...
+                                trace!("chunk {}: {:?}", i, chunk);
+
+                                // Starting a new row?
+                                if !chunk.row_key.is_empty() {
+                                    row_key = String::from_utf8(chunk.row_key).ok();
+                                    // Require UTF-8 for row keys
+                                }
+
+                                // Starting a new cell?
+                                if let Some(qualifier) = chunk.qualifier {
+                                    if let Some(cell_name) = cell_name {
+                                        row_data.push((cell_name, cell_value));
+                                        cell_value = vec![];
+                                    }
+                                    cell_name = String::from_utf8(qualifier).ok(); // Require UTF-8 for cell names
+                                    cell_timestamp = chunk.timestamp_micros;
+                                    cell_version_ok = true;
+                                } else {
+                                    // Continuing the existing cell.  Check if this is the start of another version of the cell
+                                    if chunk.timestamp_micros != 0 {
+                                        if chunk.timestamp_micros < cell_timestamp {
+                                            cell_version_ok = false; // ignore older versions of the cell
+                                        } else {
+                                            // newer version of the cell, remove the older cell
+                                            cell_version_ok = true;
+                                            cell_value = vec![];
+                                            cell_timestamp = chunk.timestamp_micros;
+                                        }
+                                    }
+                                }
+                                if cell_version_ok {
+                                    cell_value.append(&mut chunk.value);
+                                }
+
+                                // End of a row?
+                                if chunk.row_status.is_some() {
+                                    if let Some(
+                                        read_rows_response::cell_chunk::RowStatus::CommitRow(_),
+                                    ) = chunk.row_status
+                                    {
+                                        if let Some(cell_name) = cell_name {
+                                            row_data.push((cell_name, cell_value));
+                                        }
+
+                                        if let Some(row_key) = row_key {
+                                            if sender
+                                                .send(Ok((
+                                                    row_key.clone(),
+                                                    deserialize_protobuf_or_bincode_cell_data(
+                                                        &row_data, &table, row_key,
+                                                    )
+                                                    .unwrap(),
+                                                )))
+                                                .is_err()
+                                            {
+                                                error!("error yo!");
+                                                return;
+                                            }
+                                        }
+                                    }
+
+                                    row_key = None;
+                                    row_data = vec![];
+                                    cell_value = vec![];
+                                    cell_name = None;
+                                }
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        error!("got error: {:?}", e);
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(receiver)
     }
 
     pub async fn get_protobuf_or_bincode_cells<'a, B, P>(
