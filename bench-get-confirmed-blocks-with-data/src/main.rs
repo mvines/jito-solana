@@ -16,13 +16,13 @@ use {
 fn main() {
     env_logger::init();
 
-    let num_tasks = 128;
-    let lowest_slot: Slot = 110_000_000;
+    let num_tasks = 256;
+    let lowest_slot: Slot = 50_000_000;
     let highest_slot: Slot = 135_000_000;
     let task_unit = (highest_slot - lowest_slot) / num_tasks;
     let log_duration = Duration::from_secs(1);
 
-    let test_duration = Duration::from_secs(120);
+    let test_duration = Duration::from_secs(600);
 
     info!("Benchmarking performance of stream_confirmed_blocks_with_data",);
 
