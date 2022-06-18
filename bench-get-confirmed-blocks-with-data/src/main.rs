@@ -1,41 +1,58 @@
 use {
-    rand::{thread_rng, Rng},
     solana_sdk::clock::Slot,
-    std::time::Instant,
+    std::time::{Duration, Instant},
     tokio::task::JoinHandle,
 };
 
 fn main() {
     let num_blocks_to_fetch: Vec<u64> = vec![100, 250, 500];
-    let num_tasks = 64;
+    let num_tasks = 128;
 
     for limit in num_blocks_to_fetch {
         println!(
             "Benchmarking performance of get_confirmed_blocks_with_data for {:?} blocks",
             limit
         );
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let highest_slot: Slot = 123506966; // recent slots are more uniform; genesis slots are tiny
+        let highest_slot: Slot = 137_000_000; // recent slots are more uniform; genesis slots are tiny
+        let lowest_slot: Slot = 100_000_000;
+        let task_unit = (highest_slot - lowest_slot) / num_tasks;
+
+        let test_duration = Duration::from_secs(30);
 
         let start = Instant::now();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+
         let results: Vec<usize> = runtime.block_on(async {
             let tasks: Vec<JoinHandle<usize>> = (0..num_tasks)
-                .map(|_| {
-                    let mut rng = thread_rng();
-                    let starting_slot: Slot = rng.gen_range(highest_slot - 1_000_000..highest_slot); // prevent caching by requesting random slot
+                .map(|i| {
                     runtime.spawn(async move {
                         let bigtable =
                             solana_storage_bigtable::LedgerStorage::new(true, None, None)
                                 .await
                                 .expect("connected to bigtable");
-                        let slots: Vec<_> = (starting_slot..starting_slot + limit).collect();
-                        let blocks: Vec<_> = bigtable
-                            .get_confirmed_blocks_with_data(&slots.as_slice())
-                            .await
-                            .expect("got blocks")
-                            .collect();
 
-                        blocks.len()
+                        let start = Instant::now();
+                        let mut num_blocks_fetched = 0;
+                        let mut starting_slot = (task_unit * i) + lowest_slot;
+
+                        while start.elapsed() < test_duration {
+                            let slot_requests: Vec<_> = (starting_slot
+                                ..starting_slot.checked_add(limit).unwrap_or(u64::MAX))
+                                .collect();
+                            // println!(
+                            //     "task {} fetching slots ({}, {})",
+                            //     i,
+                            //     slot_requests.first().unwrap(),
+                            //     slot_requests.last().unwrap()
+                            // );
+                            num_blocks_fetched += bigtable
+                                .get_confirmed_blocks_with_data(slot_requests.as_slice())
+                                .await
+                                .expect("got blocks")
+                                .count();
+                            starting_slot += limit;
+                        }
+                        num_blocks_fetched
                     })
                 })
                 .collect();
