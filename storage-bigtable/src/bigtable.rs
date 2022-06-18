@@ -348,6 +348,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
                         }
 
                         if let Some(row_key) = row_key {
+                            info!("got row");
                             rows.push((row_key, row_data))
                         }
                     }

@@ -15,12 +15,12 @@ fn main() {
 
     let num_blocks_to_fetch: Vec<u64> = vec![10, 25, 50, 100, 200, 300, 400, 500];
     let num_tasks = 128;
-    let lowest_slot: Slot = 100_000_000;
-    let highest_slot: Slot = 137_000_000;
+    let lowest_slot: Slot = 50_000_000;
+    let highest_slot: Slot = 135_000_000;
     let task_unit = (highest_slot - lowest_slot) / num_tasks;
     let log_duration = Duration::from_secs(1);
 
-    let test_duration = Duration::from_secs(30);
+    let test_duration = Duration::from_secs(60);
 
     for chunk_size in num_blocks_to_fetch {
         info!(
@@ -44,12 +44,13 @@ fn main() {
                         let total_blocks_read = *total_blocks_read.lock().unwrap();
                         let blocks_received = total_blocks_read - last_update_count;
                         info!(
-                            "[tasks={}, chunk_size={}, blocks_received={}, elapsed={:.2}, blocks/s={:?}]",
+                            "[tasks={}, chunk_size={}, blocks_received={}, elapsed={:.2}, blocks/s={:?}, total_blocks_read={}]",
                             num_tasks,
                             chunk_size,
                             blocks_received,
                             elapsed.as_secs_f32(),
-                            blocks_received as f64 / elapsed.as_secs_f64()
+                            blocks_received as f64 / elapsed.as_secs_f64(),
+                            total_blocks_read
                         );
 
                         last_update_time = Instant::now();
