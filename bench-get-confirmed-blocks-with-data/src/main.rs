@@ -16,7 +16,7 @@ use {
 fn main() {
     env_logger::init();
 
-    let num_tasks = 256;
+    let num_tasks = 128;
     let lowest_slot: Slot = 50_000_000;
     let highest_slot: Slot = 135_000_000;
     let task_unit = (highest_slot - lowest_slot) / num_tasks;
