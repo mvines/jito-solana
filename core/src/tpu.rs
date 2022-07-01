@@ -265,10 +265,11 @@ impl Tpu {
         tip_accounts.insert(tip_manager.config_pubkey());
         tip_accounts.insert(tip_manager.program_id());
 
+        let (fake_sender, fake_receiver) = unbounded();
         let banking_stage = BankingStage::new(
             cluster_info,
             poh_recorder,
-            verified_receiver,
+            fake_receiver,
             verified_tpu_vote_packets_receiver,
             verified_gossip_vote_packets_receiver,
             transaction_status_sender.clone(),
