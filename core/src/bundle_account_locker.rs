@@ -342,6 +342,7 @@ impl BundleAccountLocker {
                 )
             })
             .collect();
+        info!("tx len: {:?}", transactions.len());
 
         // check for duplicate transactions
         let unique_signatures: HashSet<&Signature, RandomState> =
@@ -365,7 +366,7 @@ impl BundleAccountLocker {
             || unique_signatures.len() != transactions.len()
             || check_results.iter().any(|r| r.0.is_err())
         {
-            debug!("check_results: {:?}", check_results);
+            info!("tx len: {:?}, bundle packet len: {:?}, uniq: {:?}, check_results: {:?}", transactions.len(), bundle.batch.packets.len(), unique_signatures.len(), check_results);
             return Err(BundleSchedulerError::InvalidPackets(bundle.uuid));
         }
 

@@ -361,6 +361,7 @@ impl RelayerStage {
                 })?;
             match msg {
                 Msg::BatchList(batch_wrapper) => {
+                    return Ok((0, 0, false));
                     batches_received += batch_wrapper.batch_list.len();
                     let packet_batches = batch_wrapper
                         .batch_list
