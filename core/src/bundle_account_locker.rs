@@ -1,3 +1,4 @@
+use std::any::Any;
 use {
     crate::{
         bundle::PacketBundle,
@@ -24,6 +25,8 @@ use {
     thiserror::Error,
     uuid::Uuid,
 };
+use solana_runtime::bank::TransactionCheckResult;
+use solana_sdk::transaction::TransactionError;
 
 #[derive(Error, Debug, PartialEq, Eq, Clone)]
 pub enum BundleSchedulerError {
@@ -364,7 +367,14 @@ impl BundleAccountLocker {
         if transactions.is_empty()
             || bundle.batch.packets.len() != transactions.len()
             || unique_signatures.len() != transactions.len()
-            || check_results.iter().any(|r| r.0.is_err())
+            || check_results.iter().filter(|r| match r {
+            (Err(TransactionError::BlockhashNotFound), _) => {
+                false
+            },
+            _ => {
+                true
+            }
+        }).any(|r| r.0.is_err())
         {
             info!("tx len: {:?}, bundle packet len: {:?}, uniq: {:?}, check_results: {:?}", transactions.len(), bundle.batch.packets.len(), unique_signatures.len(), check_results);
             return Err(BundleSchedulerError::InvalidPackets(bundle.uuid));
