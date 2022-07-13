@@ -384,7 +384,7 @@ impl BundleAccountLocker {
             || unique_signatures.len() != transactions.len()
             || check_results.iter().any(|r| r.0.is_err())
         {
-            info!("tx len: {:?}, bundle packet len: {:?}, uniq: {:?}, check_results: {:?}", transactions.len(), bundle.batch.packets.len(), unique_signatures.len(), check_results);
+            info!("blockhash: {:?}, tx len: {:?}, bundle packet len: {:?}, uniq: {:?}, check_results: {:?}", transactions[0].message.recent_blockhash(), transactions.len(), bundle.batch.packets.len(), unique_signatures.len(), check_results);
             return Err(BundleSchedulerError::InvalidPackets(bundle.uuid));
         }
 
