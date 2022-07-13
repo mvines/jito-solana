@@ -1,3 +1,4 @@
+use crossbeam_channel::Sender;
 use {
     crate::{
         bundle::PacketBundle,
@@ -24,6 +25,7 @@ use {
     thiserror::Error,
     uuid::Uuid,
 };
+use crate::banking_stage::BankingPacketBatch;
 
 #[derive(Error, Debug, PartialEq, Eq, Clone)]
 pub enum BundleSchedulerError {
@@ -85,6 +87,8 @@ pub struct BundleAccountLocker {
     locked_bundles: VecDeque<LockedBundle>,
     read_locks: HashMap<Pubkey, u64>,
     write_locks: HashMap<Pubkey, u64>,
+
+    banking_loopback: Option<Sender<BankingPacketBatch>>,
 }
 
 /// One can think of this like a bundle-level AccountLocks.
@@ -104,7 +108,7 @@ impl BundleAccountLocker {
     // A larger num_bundle_batches_prelock means BankingStage may get blocked waiting for bundle to
     // execute. A smaller num_bundle_batches_prelock means BundleStage may get blocked waiting for
     // AccountInUse to disappear before execution.
-    pub fn new(num_bundles_prelock: u64, tip_program_id: &Pubkey) -> BundleAccountLocker {
+    pub fn new(num_bundles_prelock: u64, tip_program_id: &Pubkey, banking_loopback: Option<Sender<BankingPacketBatch>>) -> BundleAccountLocker {
         BundleAccountLocker {
             num_bundles_prelock,
             unlocked_bundles: VecDeque::with_capacity(100),
@@ -122,6 +126,7 @@ impl BundleAccountLocker {
                 // all of the MEV profits from a validator and stakers.
                 *tip_program_id,
             ]),
+            banking_loopback: banking_loopback,
         }
     }
 
@@ -188,6 +193,7 @@ impl BundleAccountLocker {
                 bank,
                 &self.blacklisted_accounts,
                 consensus_accounts_cache,
+                self.banking_loopback.clone(),
             ) {
                 Ok(locked_bundle) => {
                     self.lock_bundle_accounts(&locked_bundle);
@@ -210,6 +216,7 @@ impl BundleAccountLocker {
                 bank,
                 &self.blacklisted_accounts,
                 consensus_accounts_cache,
+                None,
             ) {
                 Ok(new_locked_bundle) => new_locked_bundle,
                 Err(e) => {
@@ -239,12 +246,14 @@ impl BundleAccountLocker {
         bank: &Arc<Bank>,
         blacklisted_accounts: &HashSet<Pubkey>,
         consensus_accounts_cache: &HashSet<Pubkey>,
+        banking_loopback: Option<Sender<BankingPacketBatch>>,
     ) -> Result<LockedBundle> {
         let sanitized_bundle = Self::get_sanitized_bundle(
             packet_bundle,
             bank,
             blacklisted_accounts,
             consensus_accounts_cache,
+            banking_loopback,
         )?;
         let (read_locks, write_locks) =
             Self::get_read_write_locks(&sanitized_bundle, &bank.feature_set)?;
@@ -343,6 +352,7 @@ impl BundleAccountLocker {
         bank: &Arc<Bank>,
         blacklisted_accounts: &HashSet<Pubkey>,
         consensus_accounts_cache: &HashSet<Pubkey>,
+        banking_loopback: Option<Sender<BankingPacketBatch>>,
     ) -> Result<SanitizedBundle> {
         let packet_indexes = Self::generate_packet_indexes(&bundle.batch);
         let deserialized_packets = deserialize_packets(&bundle.batch, &packet_indexes);
@@ -385,6 +395,9 @@ impl BundleAccountLocker {
             || check_results.iter().any(|r| r.0.is_err())
         {
             info!("blockhash: {:?}, tx len: {:?}, bundle packet len: {:?}, uniq: {:?}, check_results: {:?}", transactions[0].message.recent_blockhash(), transactions.len(), bundle.batch.packets.len(), unique_signatures.len(), check_results);
+            if let Some(banking_loopback) = banking_loopback {
+                banking_loopback.send((vec![bundle.clone().batch], None));
+            }
             return Err(BundleSchedulerError::InvalidPackets(bundle.uuid));
         }
 
@@ -482,7 +495,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique(), None);
 
         let kp = Keypair::new();
 
@@ -538,7 +551,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique(), None);
 
         let kp1 = Keypair::new();
         let kp2 = Keypair::new();
@@ -606,7 +619,7 @@ mod tests {
         } = create_genesis_config(2);
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
-        let mut bundle_account_locker = BundleAccountLocker::new(1, &Pubkey::new_unique());
+        let mut bundle_account_locker = BundleAccountLocker::new(1, &Pubkey::new_unique(), None);
 
         let kp1 = Keypair::new();
         let kp2 = Keypair::new();
@@ -710,7 +723,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique(), None);
 
         let kp = Keypair::new();
 
@@ -752,7 +765,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique(), None);
 
         let kp = Keypair::new();
 
@@ -793,7 +806,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique(), None);
 
         let kp = Keypair::new();
 
@@ -829,7 +842,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique(), None);
 
         let kp = Keypair::new();
 
@@ -885,7 +898,7 @@ mod tests {
         let tip_manager = TipManager::new(Pubkey::new_unique());
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &tip_manager.program_id());
+            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &tip_manager.program_id(), None);
 
         let kp = Keypair::new();
         let tx =
@@ -928,7 +941,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique(), None);
 
         let kp = Keypair::new();
         let tx =

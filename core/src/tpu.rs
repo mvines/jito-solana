@@ -252,9 +252,11 @@ impl Tpu {
 
         let tip_manager = TipManager::new(tip_program_pubkey);
 
+        let (fake_sender, fake_receiver) = unbounded();
         let bundle_account_locker = Arc::new(Mutex::new(BundleAccountLocker::new(
             NUM_BUNDLES_PRE_LOCK,
             &tip_manager.program_id(),
+            Some(fake_sender),
         )));
 
         // tip accounts can't be used in BankingStage. This makes handling race conditions
@@ -265,7 +267,6 @@ impl Tpu {
         tip_accounts.insert(tip_manager.config_pubkey());
         tip_accounts.insert(tip_manager.program_id());
 
-        let (fake_sender, fake_receiver) = unbounded();
         let banking_stage = BankingStage::new(
             cluster_info,
             poh_recorder,
