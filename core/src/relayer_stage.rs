@@ -360,7 +360,7 @@ impl RelayerStage {
                     RelayerStageError::BadMessage
                 })?;
             match msg {
-                Msg::BatchList(batch_wrapper) => {
+                Msg::Batches(batch_wrapper) => {
                     batches_received += batch_wrapper.batch_list.len();
                     let packet_batches = batch_wrapper
                         .batch_list
