@@ -1912,7 +1912,7 @@ impl BankingStage {
             bank.slot(),
             bank.parent_hash(),
             bank.parent_slot(),
-            bank.blockhash_queue.read().unwrap(),
+            bank.blockhash_queue.read().unwrap().ages.keys(),
         );
         let results = bank.check_transactions(
             transactions,

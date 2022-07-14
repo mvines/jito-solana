@@ -384,7 +384,7 @@ impl BundleAccountLocker {
             bank.slot(),
             bank.parent_hash(),
             bank.parent_slot(),
-            bank.blockhash_queue.read().unwrap(),
+            bank.blockhash_queue.read().unwrap().ages.keys(),
         );
         let check_results = bank.check_transactions(
             &transactions,
