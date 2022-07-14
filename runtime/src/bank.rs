@@ -1285,7 +1285,7 @@ pub struct Bank {
     pub src: StatusCacheRc,
 
     /// FIFO queue of `recent_blockhash` items
-    blockhash_queue: RwLock<BlockhashQueue>,
+    pub blockhash_queue: RwLock<BlockhashQueue>,
 
     /// The set of parents including this bank
     pub ancestors: Ancestors,

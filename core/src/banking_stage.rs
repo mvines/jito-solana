@@ -1906,6 +1906,14 @@ impl BankingStage {
             MAX_TRANSACTION_FORWARDING_DELAY_GPU
         };
 
+
+        info!("([bank] bank_id: {:?}, slot: {:?}, parent hash: {:?}, parent slot {:?}, bh queue: {:?}",
+            bank.bank_id(),
+            bank.slot(),
+            bank.parent_hash(),
+            bank.parent_slot(),
+            bank.blockhash_queue.read().unwrap(),
+        );
         let results = bank.check_transactions(
             transactions,
             &filter,
@@ -1914,6 +1922,11 @@ impl BankingStage {
                 .saturating_sub(FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET as usize),
             &mut error_counters,
         );
+        info!("[bank] blockhash: {:?}, tx hash: {:?}, tx len: {:?}, check_results: {:?}",
+            transactions[0].message.recent_blockhash(),
+            transactions[0].message_hash,
+            transactions.len(),
+            results);
 
         Self::filter_valid_transaction_indexes(&results, transaction_to_packet_indexes)
     }
