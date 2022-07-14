@@ -9,7 +9,7 @@ use {
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, AbiExample)]
-struct HashAge {
+pub struct HashAge {
     fee_calculator: FeeCalculator,
     hash_index: u64,
     timestamp: u64,
