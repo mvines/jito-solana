@@ -87,7 +87,6 @@ pub struct BundleAccountLocker {
     locked_bundles: VecDeque<LockedBundle>,
     read_locks: HashMap<Pubkey, u64>,
     write_locks: HashMap<Pubkey, u64>,
-
     banking_loopback: Option<Sender<BankingPacketBatch>>,
 }
 
