@@ -1907,12 +1907,17 @@ impl BankingStage {
         };
 
 
+        let trimmed: Vec<String> = bank.blockhash_queue.read().unwrap().ages.keys().map(|bh|{
+            let mut s = bh.to_string();
+            s.truncate(4);
+            s
+        }).collect();
         info!("([bundle bank] bank_id: {:?}, slot: {:?}, parent hash: {:?}, parent slot {:?}, bh queue: {:?}",
             bank.bank_id(),
             bank.slot(),
             bank.parent_hash(),
             bank.parent_slot(),
-            bank.blockhash_queue.read().unwrap().ages.keys(),
+            trimmed,
         );
         let results = bank.check_transactions(
             transactions,

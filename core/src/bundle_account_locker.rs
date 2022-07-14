@@ -379,12 +379,17 @@ impl BundleAccountLocker {
         // checks for already-processed transaction or expired/invalid blockhash
         let lock_results: Vec<_> = repeat(Ok(())).take(transactions.len()).collect();
         let mut metrics = TransactionErrorMetrics::default();
-        info!("([bundle acct] bank_id: {:?}, slot: {:?}, parent hash: {:?}, parent slot {:?}, bh queue: {:?}",
+        let trimmed: Vec<String> = bank.blockhash_queue.read().unwrap().ages.keys().map(|bh|{
+            let mut s = bh.to_string();
+            s.truncate(4);
+            s
+        }).collect();
+        let s = format!("([bundle acct] bank_id: {:?}, slot: {:?}, parent hash: {:?}, parent slot {:?}, bh queue: {:?}",
             bank.bank_id(),
             bank.slot(),
             bank.parent_hash(),
             bank.parent_slot(),
-            bank.blockhash_queue.read().unwrap().ages.keys(),
+            trimmed,
         );
         let check_results = bank.check_transactions(
             &transactions,
@@ -401,6 +406,7 @@ impl BundleAccountLocker {
             || unique_signatures.len() != transactions.len()
             || check_results.iter().any(|r| r.0.is_err())
         {
+            info!("{}", s);
             info!("[bundle acct] blockhash: {:?}, tx len: {:?}, bundle packet len: {:?}, uniq: {:?}, check_results: {:?}", transactions[0].message.recent_blockhash(), transactions.len(), bundle.batch.packets.len(), unique_signatures.len(), check_results);
             if let Some(banking_loopback) = banking_loopback {
                 banking_loopback.send((vec![bundle.clone().batch], None));
