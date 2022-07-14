@@ -1907,7 +1907,7 @@ impl BankingStage {
         };
 
 
-        info!("([bank] bank_id: {:?}, slot: {:?}, parent hash: {:?}, parent slot {:?}, bh queue: {:?}",
+        info!("([bundle bank] bank_id: {:?}, slot: {:?}, parent hash: {:?}, parent slot {:?}, bh queue: {:?}",
             bank.bank_id(),
             bank.slot(),
             bank.parent_hash(),
@@ -1922,7 +1922,7 @@ impl BankingStage {
                 .saturating_sub(FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET as usize),
             &mut error_counters,
         );
-        info!("[bank] blockhash: {:?}, tx hash: {:?}, tx len: {:?}, check_results: {:?}",
+        info!("[bundle bank] blockhash: {:?}, tx hash: {:?}, tx len: {:?}, check_results: {:?}",
             transactions[0].message.recent_blockhash(),
             transactions[0].message_hash,
             transactions.len(),
