@@ -443,6 +443,12 @@ impl BundleStage {
         bank_start: &BankStart,
         execute_and_commit_timings: &mut LeaderExecuteAndCommitTimings,
     ) -> BundleExecutionResult<Vec<CommitTransactionDetails>> {
+        info!(
+            "bundle_stage bank_hash {:?}",
+            bank_start.working_bank.parent_hash()
+        );
+        info!("bundle_stage bank slot {}", bank_start.working_bank.slot());
+
         let execution_results = Self::execute_bundle(
             sanitized_bundle,
             transaction_status_sender,
@@ -453,11 +459,6 @@ impl BundleStage {
         assert!(!execution_results.is_empty());
         // TODO: do we really want assertions in production code?
 
-        info!(
-            "bundle_stage bank_hash {:?}",
-            bank_start.working_bank.parent_hash()
-        );
-        info!("bundle_stage bank slot {}", bank_start.working_bank.slot());
         Self::record_commit_bundle(
             execution_results,
             &bank_start.working_bank,
