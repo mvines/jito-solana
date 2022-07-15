@@ -420,7 +420,8 @@ impl BundleAccountLocker {
         {
             if let Some(banking_loopback) = banking_loopback {
                 if check_results.iter().any(|r| {
-                    r.0.is_err() && r.0.err().unwrap() == TransactionError::BlockhashNotFound
+                    r.0.is_err()
+                        && r.0.as_ref().err().unwrap() == &TransactionError::BlockhashNotFound
                 }) {
                     info!("{}", s);
                     info!("[bundle acct] blockhash: {:?}, tx len: {:?}, bundle packet len: {:?}, uniq: {:?}, check_results: {:?}", transactions[0].message.recent_blockhash(), transactions.len(), bundle.batch.packets.len(), unique_signatures.len(), check_results);
