@@ -7058,21 +7058,21 @@ impl Bank {
             hash = hard_forked_hash;
         }
 
-        info!(
-            "bank frozen: {} hash: {} accounts_delta: {} signature_count: {} last_blockhash: {} capitalization: {}",
-            self.slot(),
-            hash,
-            accounts_delta_hash.hash,
-            self.signature_count(),
-            self.last_blockhash(),
-            self.capitalization(),
-        );
-
-        info!(
-            "accounts hash slot: {} stats: {:?}",
-            self.slot(),
-            accounts_delta_hash.stats,
-        );
+        // info!(
+        //     "bank frozen: {} hash: {} accounts_delta: {} signature_count: {} last_blockhash: {} capitalization: {}",
+        //     self.slot(),
+        //     hash,
+        //     accounts_delta_hash.hash,
+        //     self.signature_count(),
+        //     self.last_blockhash(),
+        //     self.capitalization(),
+        // );
+        //
+        // info!(
+        //     "accounts hash slot: {} stats: {:?}",
+        //     self.slot(),
+        //     accounts_delta_hash.stats,
+        // );
         hash
     }
 
