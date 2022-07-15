@@ -707,7 +707,7 @@ impl BundleStage {
                             Self::try_recv_bundles(bundle_receiver, bundle_account_locker)?;
                         } else {
                             // not leader now or soon, drop all buffered and new bundles
-                            let new_bundles_dropped: Vec<Uuid> =
+                            let new_bundles_dropped: Vec<i64> =
                                 bundles.iter().map(|b| b.uuid).collect();
                             let old_bundles_dropped = bundle_account_locker.lock().unwrap().clear();
                             warn!(

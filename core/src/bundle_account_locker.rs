@@ -164,13 +164,12 @@ impl BundleAccountLocker {
         self.write_locks.keys().cloned().collect()
     }
 
-    pub fn clear(&mut self) -> Vec<Uuid> {
+    pub fn clear(&mut self) -> Vec<i64> {
         let uuids_dropped = self
             .unlocked_bundles
             .iter()
             .map(|b| b.uuid)
             .chain(self.locked_bundles.iter().map(|b| b.packet_bundle.uuid))
-            .map(|_| Uuid::new_v4())
             .collect();
 
         self.unlocked_bundles.clear();
