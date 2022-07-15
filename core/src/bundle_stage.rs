@@ -364,6 +364,20 @@ impl BundleStage {
                 ),
                 "load_execute",
             );
+            if sanitized_bundle.uuid == 42069 {
+                for res in load_and_execute_transactions_output.loaded_transactions {
+                    match res.0 {
+                        Ok(_) => {
+                            info!("successful loaded tx in bundle {}");
+                        }
+                        Err(e) => {
+                            error!("loaded error {:?}", e);
+                        }
+                    }
+                }
+            } else {
+                info!("another one bundle");
+            }
             execute_and_commit_timings.load_execute_us = load_execute_time.as_us();
 
             // Return error if executed and failed or didn't execute because of an unexpected reason
@@ -449,12 +463,22 @@ impl BundleStage {
         );
         info!("bundle_stage bank slot {}", bank_start.working_bank.slot());
 
-        let execution_results = Self::execute_bundle(
+        let execution_results = match Self::execute_bundle(
             sanitized_bundle,
             transaction_status_sender,
             bank_start,
             execute_and_commit_timings,
-        )?;
+        ) {
+            Ok(res) => res,
+            Err(e) => {
+                if sanitized_bundle.uuid == 42069 {
+                    error!("error {:?}", e);
+                } else {
+                    info!("some other bundle! {}", sanitized_bundle.uuid);
+                }
+                return Err(e);
+            }
+        };
         // in order for bundle to succeed, it most have something to record + commit
         assert!(!execution_results.is_empty());
         // TODO: do we really want assertions in production code?

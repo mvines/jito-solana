@@ -541,7 +541,7 @@ mod tests {
 
         let packet_bundle = PacketBundle {
             batch: PacketBatch::new(vec![packet]),
-            uuid: Uuid::new_v4(),
+            uuid: 1,
         };
 
         bundle_account_locker.push(vec![packet_bundle]);
@@ -606,7 +606,7 @@ mod tests {
 
         let packet_bundle = PacketBundle {
             batch: PacketBatch::new(vec![packet1, packet2]),
-            uuid: Uuid::new_v4(),
+            uuid: 1,
         };
 
         bundle_account_locker.push(vec![packet_bundle]);
@@ -674,7 +674,7 @@ mod tests {
 
         let packet_bundle_1 = PacketBundle {
             batch: PacketBatch::new(vec![packet1]),
-            uuid: Uuid::new_v4(),
+            uuid: 1,
         };
 
         let packet_bundle_2 = PacketBundle {
