@@ -455,7 +455,7 @@ impl BundleStage {
 
         info!(
             "bundle_stage bank_hash {:?}",
-            bank_start.working_bank.hash()
+            bank_start.working_bank.parent_hash()
         );
         info!("bundle_stage bank slot {}", bank_start.working_bank.slot());
         Self::record_commit_bundle(
