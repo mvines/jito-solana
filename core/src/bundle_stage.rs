@@ -368,7 +368,7 @@ impl BundleStage {
                 for res in load_and_execute_transactions_output.loaded_transactions {
                     match res.0 {
                         Ok(_) => {
-                            info!("successful loaded tx in bundle {}");
+                            info!("successful loaded tx in bundle");
                         }
                         Err(e) => {
                             error!("loaded error {:?}", e);
