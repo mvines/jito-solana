@@ -170,6 +170,7 @@ impl BundleAccountLocker {
             .iter()
             .map(|b| b.uuid)
             .chain(self.locked_bundles.iter().map(|b| b.packet_bundle.uuid))
+            .map(|_| Uuid::new_v4())
             .collect();
 
         self.unlocked_bundles.clear();

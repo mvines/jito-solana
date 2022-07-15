@@ -758,7 +758,7 @@ impl BundleStage {
             let sanitized_bundle = SanitizedBundle {
                 transactions: vec![tip_manager
                     .initialize_config_tx(&bank.last_blockhash(), &cluster_info.keypair())],
-                uuid: Uuid::new_v4(),
+                uuid: 2,
             };
 
             Self::update_qos_and_execute_record_commit_bundle(
@@ -786,7 +786,7 @@ impl BundleStage {
                     bank,
                     &my_kp,
                 )?],
-                uuid: Uuid::new_v4(),
+                uuid: 3,
             };
 
             Self::update_qos_and_execute_record_commit_bundle(
