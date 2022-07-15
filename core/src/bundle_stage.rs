@@ -453,6 +453,8 @@ impl BundleStage {
         assert!(!execution_results.is_empty());
         // TODO: do we really want assertions in production code?
 
+        info!("bundle_stage bank_hash {}", bank_start.working_bank.hash());
+        info!("bundle_stage bank slot {}", bank_start.working_bank.slot());
         Self::record_commit_bundle(
             execution_results,
             &bank_start.working_bank,

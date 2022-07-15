@@ -4428,14 +4428,17 @@ impl Bank {
                 Ok(()) => {
                     let recent_blockhash = tx.message().recent_blockhash();
                     if hash_queue.is_hash_valid_for_age(recent_blockhash, max_age) {
+                        info!("valid age");
                         (Ok(()), None)
                     } else if let Some((address, account)) = self.check_transaction_for_nonce(
                         tx,
                         enable_durable_nonce,
                         &next_durable_nonce,
                     ) {
+                        info!("nonce");
                         (Ok(()), Some(NoncePartial::new(address, account)))
                     } else {
+                        info!("not found");
                         error_counters.blockhash_not_found += 1;
                         (Err(TransactionError::BlockhashNotFound), None)
                     }

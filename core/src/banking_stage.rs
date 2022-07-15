@@ -688,6 +688,8 @@ impl BankingStage {
                                 bank_creation_time,
                             }) = bank_start
                 {
+                    info!("banking_stage hash {}", working_bank.hash());
+                    info!("banking_stage slot {}", working_bank.slot());
                     let (process_transactions_summary, process_packets_transactions_time) =
                         measure!(
                                 Self::process_packets_transactions(
@@ -1877,15 +1879,22 @@ impl BankingStage {
             MAX_TRANSACTION_FORWARDING_DELAY_GPU
         };
 
-
-        if transactions.iter().any(|tx|{
-           !tx.is_simple_vote_transaction()
-        }) {
-            let trimmed: Vec<String> = bank.blockhash_queue.read().unwrap().ages.keys().map(|bh| {
-                let mut s = bh.to_string();
-                s.truncate(4);
-                s
-            }).collect();
+        if transactions
+            .iter()
+            .any(|tx| !tx.is_simple_vote_transaction())
+        {
+            let trimmed: Vec<String> = bank
+                .blockhash_queue
+                .read()
+                .unwrap()
+                .ages
+                .keys()
+                .map(|bh| {
+                    let mut s = bh.to_string();
+                    s.truncate(4);
+                    s
+                })
+                .collect();
             info!("([bundle bank] bank_id: {:?}, slot: {:?}, parent hash: {:?}, parent slot {:?}, bh queue: {:?}",
             bank.bank_id(),
             bank.slot(),
@@ -1902,14 +1911,17 @@ impl BankingStage {
                 .saturating_sub(FORWARD_TRANSACTIONS_TO_LEADER_AT_SLOT_OFFSET as usize),
             &mut error_counters,
         );
-        if transactions.iter().any(|tx|{
-            !tx.is_simple_vote_transaction()
-        }) {
-            info!("[bundle bank] blockhash: {:?}, tx hash: {:?}, tx len: {:?}, check_results: {:?}",
-            transactions[0].message.recent_blockhash(),
-            transactions[0].message_hash,
-            transactions.len(),
-            results);
+        if transactions
+            .iter()
+            .any(|tx| !tx.is_simple_vote_transaction())
+        {
+            info!(
+                "[bundle bank] blockhash: {:?}, tx hash: {:?}, tx len: {:?}, check_results: {:?}",
+                transactions[0].message.recent_blockhash(),
+                transactions[0].message_hash,
+                transactions.len(),
+                results
+            );
         }
 
         Self::filter_valid_transaction_indexes(&results, transaction_to_packet_indexes)
