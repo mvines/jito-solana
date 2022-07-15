@@ -365,8 +365,8 @@ impl BundleStage {
                 "load_execute",
             );
             if sanitized_bundle.uuid == 42069 {
-                for res in load_and_execute_transactions_output.loaded_transactions {
-                    match res.0 {
+                for res in &load_and_execute_transactions_output.loaded_transactions {
+                    match res.0.as_ref() {
                         Ok(_) => {
                             info!("successful loaded tx in bundle");
                         }
