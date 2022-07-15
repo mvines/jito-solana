@@ -32,9 +32,9 @@ use {
 #[derive(Error, Debug, PartialEq, Eq, Clone)]
 pub enum BundleSchedulerError {
     #[error("Bundle locking error uuid: {0}")]
-    GetLocksError(Uuid),
+    GetLocksError(i64),
     #[error("Bundle contains invalid packets uuid: {0}")]
-    InvalidPackets(Uuid),
+    InvalidPackets(i64),
 }
 
 pub type Result<T> = std::result::Result<T, BundleSchedulerError>;
