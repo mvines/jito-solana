@@ -688,7 +688,7 @@ impl BankingStage {
                                 bank_creation_time,
                             }) = bank_start
                 {
-                    info!("banking_stage hash {}", working_bank.hash());
+                    info!("banking_stage hash {:?}", working_bank.hash());
                     info!("banking_stage slot {}", working_bank.slot());
                     let (process_transactions_summary, process_packets_transactions_time) =
                         measure!(
