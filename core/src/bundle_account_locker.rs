@@ -13,7 +13,6 @@ use {
         feature_set::FeatureSet,
         pubkey::Pubkey,
         signature::Signature,
-        signer::SignerError::TransactionError,
         transaction::{
             AddressLoader, SanitizedTransaction, TransactionAccountLocks, TransactionError,
         },
