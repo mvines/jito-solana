@@ -1,9 +1,10 @@
-use crossbeam_channel::Sender;
 use {
     crate::{
+        banking_stage::BankingPacketBatch,
         bundle::PacketBundle,
         unprocessed_packet_batches::{deserialize_packets, ImmutableDeserializedPacket},
     },
+    crossbeam_channel::Sender,
     solana_perf::packet::PacketBatch,
     solana_runtime::{bank::Bank, transaction_error_metrics::TransactionErrorMetrics},
     solana_sdk::{
@@ -12,7 +13,10 @@ use {
         feature_set::FeatureSet,
         pubkey::Pubkey,
         signature::Signature,
-        transaction::{AddressLoader, SanitizedTransaction, TransactionAccountLocks},
+        signer::SignerError::TransactionError,
+        transaction::{
+            AddressLoader, SanitizedTransaction, TransactionAccountLocks, TransactionError,
+        },
     },
     std::{
         collections::{
@@ -25,7 +29,6 @@ use {
     thiserror::Error,
     uuid::Uuid,
 };
-use crate::banking_stage::BankingPacketBatch;
 
 #[derive(Error, Debug, PartialEq, Eq, Clone)]
 pub enum BundleSchedulerError {
@@ -107,7 +110,11 @@ impl BundleAccountLocker {
     // A larger num_bundle_batches_prelock means BankingStage may get blocked waiting for bundle to
     // execute. A smaller num_bundle_batches_prelock means BundleStage may get blocked waiting for
     // AccountInUse to disappear before execution.
-    pub fn new(num_bundles_prelock: u64, tip_program_id: &Pubkey, banking_loopback: Option<Sender<BankingPacketBatch>>) -> BundleAccountLocker {
+    pub fn new(
+        num_bundles_prelock: u64,
+        tip_program_id: &Pubkey,
+        banking_loopback: Option<Sender<BankingPacketBatch>>,
+    ) -> BundleAccountLocker {
         BundleAccountLocker {
             num_bundles_prelock,
             unlocked_bundles: VecDeque::with_capacity(100),
@@ -378,11 +385,18 @@ impl BundleAccountLocker {
         // checks for already-processed transaction or expired/invalid blockhash
         let lock_results: Vec<_> = repeat(Ok(())).take(transactions.len()).collect();
         let mut metrics = TransactionErrorMetrics::default();
-        let trimmed: Vec<String> = bank.blockhash_queue.read().unwrap().ages.keys().map(|bh|{
-            let mut s = bh.to_string();
-            s.truncate(4);
-            s
-        }).collect();
+        let trimmed: Vec<String> = bank
+            .blockhash_queue
+            .read()
+            .unwrap()
+            .ages
+            .keys()
+            .map(|bh| {
+                let mut s = bh.to_string();
+                s.truncate(4);
+                s
+            })
+            .collect();
         let s = format!("([bundle acct] bank_id: {:?}, slot: {:?}, parent hash: {:?}, parent slot {:?}, bh queue: {:?}",
             bank.bank_id(),
             bank.slot(),
@@ -405,10 +419,16 @@ impl BundleAccountLocker {
             || unique_signatures.len() != transactions.len()
             || check_results.iter().any(|r| r.0.is_err())
         {
-            info!("{}", s);
-            info!("[bundle acct] blockhash: {:?}, tx len: {:?}, bundle packet len: {:?}, uniq: {:?}, check_results: {:?}", transactions[0].message.recent_blockhash(), transactions.len(), bundle.batch.packets.len(), unique_signatures.len(), check_results);
             if let Some(banking_loopback) = banking_loopback {
-                banking_loopback.send((vec![bundle.clone().batch], None));
+                if check_results.iter().any(|r| {
+                    r.0.is_err() && r.0.err().unwrap() == TransactionError::BlockhashNotFound
+                }) {
+                    info!("{}", s);
+                    info!("[bundle acct] blockhash: {:?}, tx len: {:?}, bundle packet len: {:?}, uniq: {:?}, check_results: {:?}", transactions[0].message.recent_blockhash(), transactions.len(), bundle.batch.packets.len(), unique_signatures.len(), check_results);
+                    banking_loopback
+                        .send((vec![bundle.clone().batch], None))
+                        .unwrap();
+                }
             }
             return Err(BundleSchedulerError::InvalidPackets(bundle.uuid));
         }
