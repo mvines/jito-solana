@@ -423,7 +423,7 @@ impl RelayerStage {
                         // TODO (LB): copy over UUID from Bundle
                         PacketBundle {
                             batch,
-                            uuid: Uuid::new_v4(),
+                            uuid: b.uuid,
                         }
                     })
                     .collect();
