@@ -9,7 +9,7 @@ use {
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, AbiExample)]
-struct HashAge {
+pub struct HashAge {
     fee_calculator: FeeCalculator,
     hash_index: u64,
     timestamp: u64,
@@ -25,7 +25,7 @@ pub struct BlockhashQueue {
     /// last hash to be registered
     last_hash: Option<Hash>,
 
-    ages: HashMap<Hash, HashAge>,
+    pub ages: HashMap<Hash, HashAge>,
 
     /// hashes older than `max_age` will be dropped from the queue
     max_age: usize,

@@ -59,6 +59,7 @@ use {
     },
     uuid::Uuid,
 };
+use solana_sdk::bundle::error::BundleExecutionError::TipError;
 
 type BundleExecutionResult<T> = Result<T, BundleExecutionError>;
 
@@ -67,6 +68,12 @@ struct AllExecutionResults {
     pub sanitized_txs: Vec<SanitizedTransaction>,
     pub pre_balances: (TransactionBalances, TransactionTokenBalances),
     pub post_balances: (TransactionBalances, TransactionTokenBalances),
+}
+
+pub enum BufferedBundleDecision {
+    Consume,
+    Drop,
+    Hold,
 }
 
 pub struct BundleStage {
@@ -716,8 +723,10 @@ impl BundleStage {
             working_bank: bank, ..
         } = bank_start;
 
+        info!("[billtip] executing maybe_initialize");
         let maybe_init_tip_payment_config_tx =
             if tip_manager.should_initialize_tip_payment_program(bank) {
+                info!("[billtip] initializing tip program config");
                 info!("initializing tip-payment program config");
                 Some(tip_manager.initialize_tip_payment_program_tx(
                     bank.last_blockhash(),
@@ -729,22 +738,24 @@ impl BundleStage {
 
         let maybe_init_tip_distro_config_tx =
             if tip_manager.should_initialize_tip_distribution_config(bank) {
+                info!("[billtip] initializing tip-distribution program config");
                 info!("initializing tip-distribution program config");
                 Some(tip_manager.initialize_tip_distribution_config_tx(
                     bank.last_blockhash(),
                     &cluster_info.keypair(),
                 ))
             } else {
+                info!("[billtip] tip distribution config already initialized");
                 None
             };
 
         let maybe_init_tip_distro_account_tx = if tip_manager
             .should_init_tip_distribution_account(bank)
         {
-            info!("initializing my [TipDistributionAccount]");
-
+            info!("[billtip] initializing my [TipDistributionAccount]");
             Some(tip_manager.init_tip_distribution_account_tx(bank.last_blockhash(), bank.epoch()))
         } else {
+            info!("[billtip] tip distribution account already initialized");
             None
         };
 
@@ -758,7 +769,7 @@ impl BundleStage {
         .collect::<Vec<SanitizedTransaction>>();
 
         if !transactions.is_empty() {
-            info!("executing init txs");
+            info!("[billtip] executing init txs");
             Self::update_qos_and_execute_record_commit_bundle(
                 &SanitizedBundle {
                     transactions,
@@ -771,7 +782,7 @@ impl BundleStage {
                 bank_start,
                 execute_and_commit_timings,
             )?;
-            info!("successfully executed init txs");
+            info!("[billtip] successfully executed init txs");
         }
 
         let configured_tip_receiver = tip_manager.get_configured_tip_receiver(bank)?;
@@ -779,7 +790,7 @@ impl BundleStage {
 
         if configured_tip_receiver != my_tip_distribution_pda {
             info!(
-                "changing tip receiver from {:?} to {:?}",
+                "[billtip] changing tip receiver from {:?} to {:?}",
                 configured_tip_receiver, my_tip_distribution_pda
             );
             let sanitized_bundle = SanitizedBundle {
@@ -834,6 +845,11 @@ impl BundleStage {
                 Some(locked_bundle) => {
                     let _lock = tip_manager.lock();
                     let tip_pdas = tip_manager.get_tip_accounts();
+                    let accts: Vec<String> = tip_pdas.iter().map(|acct|{
+                       acct.to_string()
+                    }).collect();
+                    info!("[billtip] tip accounts: {:?}", accts);
+                    info!("[billtip] current tip receiver: {:?}", tip_manager.get_configured_tip_receiver(&bank_start.working_bank));
                     if Self::bundle_touches_tip_pdas(
                         &locked_bundle.sanitized_bundle().transactions,
                         &tip_pdas,
@@ -1130,7 +1146,7 @@ mod tests {
         let cost_model = Arc::new(RwLock::new(CostModel::default()));
         let qos_service = QosService::new(cost_model, 0);
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique(), None);
         let mut execute_and_commit_timings = LeaderExecuteAndCommitTimings::default();
         let bank_start = poh_recorder.read().unwrap().bank_start().unwrap();
         bundle_account_locker.push(bundle.clone());
@@ -1328,7 +1344,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique(), None);
         bundle_account_locker.push(bundle);
         let locked_bundle = bundle_account_locker.pop(&bank, &HashSet::default());
 
@@ -1414,7 +1430,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique(), None);
         bundle_account_locker.push(bundle);
         let locked_bundle = bundle_account_locker.pop(&bank, &HashSet::default());
 
@@ -1489,6 +1505,7 @@ mod tests {
         let bundle_account_locker = Arc::new(Mutex::new(BundleAccountLocker::new(
             NUM_BUNDLES_PRE_LOCK,
             &Pubkey::new_unique(),
+            None,
         )));
 
         let scheduled_bundles = BundleStage::schedule_bundles_until_leader(

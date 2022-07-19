@@ -357,6 +357,7 @@ fn main() {
         let bundle_account_locker = Arc::new(Mutex::new(BundleAccountLocker::new(
             NUM_BUNDLES_PRE_LOCK,
             &Pubkey::new_unique(),
+            None,
         )));
 
         let connection_cache = match tpu_use_quic {

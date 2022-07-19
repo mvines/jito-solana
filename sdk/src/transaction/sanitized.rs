@@ -28,7 +28,7 @@ pub const MAX_TX_ACCOUNT_LOCKS: usize = 64;
 #[derive(Debug, Clone)]
 pub struct SanitizedTransaction {
     pub message: SanitizedMessage,
-    message_hash: Hash,
+    pub message_hash: Hash,
     is_simple_vote_tx: bool,
     signatures: Vec<Signature>,
 }
