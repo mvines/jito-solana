@@ -60,6 +60,7 @@ use {
     },
     uuid::Uuid,
 };
+use solana_sdk::bundle::error::BundleExecutionError::TipError;
 
 type BundleExecutionResult<T> = Result<T, BundleExecutionError>;
 
@@ -723,15 +724,18 @@ impl BundleStage {
             bank_creation_time: _,
         } = bank_start;
 
+        info!("[billtip] executing maybe_initialize");
         if bank.get_account(&tip_manager.config_pubkey()).is_none() {
+            info!("[billtip] initializing tip program config");
             info!("initializing tip program config");
             let sanitized_bundle = SanitizedBundle {
                 transactions: vec![tip_manager
                     .initialize_config_tx(&bank.last_blockhash(), &cluster_info.keypair())],
                 uuid: Uuid::new_v4(),
             };
+            info!("[billtip] build sanitized bundle: {:?}", sanitized_bundle);
 
-            Self::update_qos_and_execute_record_commit_bundle(
+            if let Err(e) = Self::update_qos_and_execute_record_commit_bundle(
                 &sanitized_bundle,
                 recorder,
                 transaction_status_sender,
@@ -739,37 +743,56 @@ impl BundleStage {
                 qos_service,
                 bank_start,
                 execute_and_commit_timings,
-            )?;
+            ) {
+                info!("[billtip] error in update_qos_and_execute... {:?}", e);
+                return Err(e);
+            } else {
+                info!("[billtip] update_qos executed successfully");
+            }
         }
 
-        let current_tip_receiver = tip_manager.get_current_tip_receiver(bank)?;
-        let my_kp = cluster_info.keypair();
-        if current_tip_receiver != my_kp.pubkey() {
-            info!(
-                "changing tip receiver from {:?} to {:?}",
+        let current_tip_receiver = tip_manager.get_current_tip_receiver(bank);
+        match current_tip_receiver {
+            Ok(current_tip_receiver) => {
+                info!("[billtip] current tip receiver: {:?}", current_tip_receiver);
+                let my_kp = cluster_info.keypair();
+                if current_tip_receiver != my_kp.pubkey() {
+                    info!(
+                "[billtip] changing tip receiver from {:?} to {:?}",
                 current_tip_receiver,
                 my_kp.pubkey()
             );
-            let sanitized_bundle = SanitizedBundle {
-                transactions: vec![tip_manager.change_tip_receiver_tx(
-                    &my_kp.pubkey(),
-                    bank,
-                    &my_kp,
-                )?],
-                uuid: Uuid::new_v4(),
-            };
+                    let sanitized_bundle = SanitizedBundle {
+                        transactions: vec![tip_manager.change_tip_receiver_tx(
+                            &my_kp.pubkey(),
+                            bank,
+                            &my_kp,
+                        )?],
+                        uuid: Uuid::new_v4(),
+                    };
 
-            Self::update_qos_and_execute_record_commit_bundle(
-                &sanitized_bundle,
-                recorder,
-                transaction_status_sender,
-                gossip_vote_sender,
-                qos_service,
-                bank_start,
-                execute_and_commit_timings,
-            )?;
+                    if let Err(e) = Self::update_qos_and_execute_record_commit_bundle(
+                        &sanitized_bundle,
+                        recorder,
+                        transaction_status_sender,
+                        gossip_vote_sender,
+                        qos_service,
+                        bank_start,
+                        execute_and_commit_timings,
+                    ){
+                        error!("[billtip] error in update_qos_and_execute: {:?}", e);
+                        return Err(e);
+                    } else {
+                        info!("[billtip] successful update_qos_and_execute");
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => {
+                error!("[billtip] error getting current tip receiver: {:?}", e);
+                return Err(TipError(e));
+            }
         }
-        Ok(())
     }
 
     /// Executes as many bundles as possible until there's no more bundles to execute or the slot
