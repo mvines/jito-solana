@@ -826,7 +826,11 @@ impl BundleStage {
                 }
                 Some(locked_bundle) => {
                     let tip_pdas = tip_manager.get_tip_accounts();
-                    info!("[billtip] tip accounts: {:?}", tip_pdas);
+                    let accts: Vec<String> = tip_pdas.iter().map(|acct|{
+                       acct.to_string()
+                    }).collect();
+                    info!("[billtip] tip accounts: {:?}", accts);
+                    info!("[billtip] current tip receiver: {:?}", tip_manager.get_current_tip_receiver(&bank_start.working_bank));
                     if Self::bundle_touches_tip_pdas(
                         &locked_bundle.sanitized_bundle().transactions,
                         &tip_pdas,
