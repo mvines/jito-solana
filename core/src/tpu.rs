@@ -251,12 +251,8 @@ impl Tpu {
         let (fake_sender, fake_receiver) = unbounded();
         let bundle_account_locker = Arc::new(Mutex::new(BundleAccountLocker::new(
             NUM_BUNDLES_PRE_LOCK,
-<<<<<<< HEAD
             &tip_manager.tip_payment_program_id(),
-=======
-            &tip_manager.program_id(),
             Some(fake_sender),
->>>>>>> 0xspl.iff/print_blockhash_errors
         )));
 
         // tip accounts can't be used in BankingStage. This makes handling race conditions

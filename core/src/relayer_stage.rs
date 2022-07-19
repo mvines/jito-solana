@@ -785,73 +785,9 @@ impl RelayerAndBlockEngineStage {
         cluster_info.set_my_contact_info(new_contact_info);
     }
 
-<<<<<<< HEAD
     pub fn join(self) -> thread::Result<()> {
         for t in self.relayer_threads {
             t.join()?;
-=======
-    fn handle_packet(
-        msg: std::result::Result<SubscribePacketsResult, RecvError>,
-        packet_sender: &Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
-        tpu_proxy_heartbeat_sender: &Option<Sender<HeartbeatEvent>>,
-        tpu: &SocketAddr,
-        tpu_fwd: &SocketAddr,
-    ) -> Result<(usize, usize, bool)> {
-        let mut is_heartbeat = false;
-        let mut batches_received = 0;
-        let mut packets_received = 0;
-        if let Ok(msg) = msg {
-            let msg = msg?
-                .ok_or_else(|| {
-                    datapoint_info!(METRICS_NAME, ("grpc_stream_disconnected", 1, i64));
-                    RelayerStageError::GrpcStreamDisconnected
-                })?
-                .msg
-                .ok_or_else(|| {
-                    datapoint_info!(METRICS_NAME, ("bad_message", 1, i64));
-                    RelayerStageError::BadMessage
-                })?;
-            match msg {
-                Msg::BatchList(batch_wrapper) => {
-                    return Ok((0, 0, false));
-                    batches_received += batch_wrapper.batch_list.len();
-                    let packet_batches = batch_wrapper
-                        .batch_list
-                        .into_iter()
-                        .map(|batch| {
-                            packets_received += batch.packets.len();
-                            PacketBatch::new(
-                                batch
-                                    .packets
-                                    .into_iter()
-                                    .map(proto_packet_to_packet)
-                                    .collect(),
-                            )
-                        })
-                        .collect();
-                    packet_sender.send((packet_batches, None)).map_err(|_| {
-                        datapoint_info!(METRICS_NAME, ("proxy_packet_forward_failed", 1, i64));
-                        RelayerStageError::ChannelError
-                    })?;
-                }
-                // The boolean value of heartbeat is meaningless but needs to be a protobuf type
-                Msg::Heartbeat(_) => {
-                    // always sends because tpu_proxy has its own fail-safe and can't assume
-                    // state
-                    if let Some(tpu_proxy_heartbeat_sender) = tpu_proxy_heartbeat_sender {
-                        tpu_proxy_heartbeat_sender
-                            .send((*tpu, *tpu_fwd))
-                            .map_err(|_| {
-                                datapoint_info!(METRICS_NAME, ("heartbeat_channel_error", 1, i64));
-                                RelayerStageError::HeartbeatChannelError
-                            })?;
-                    }
-                    is_heartbeat = true;
-                }
-            }
-        } else {
-            return Err(RelayerStageError::ChannelError);
->>>>>>> 0xspl.iff/print_blockhash_errors
         }
         self.heartbeat_thread.join()?;
         Ok(())

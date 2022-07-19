@@ -463,7 +463,7 @@ impl BundleAccountLocker {
             if let Some(banking_loopback) = banking_loopback {
                 banking_loopback.send((vec![bundle.clone().batch], None));
             }
-            return Err(BundleSchedulerError::InvalidPackets(bundle.uuid));
+            return Err(BundleSchedulerError::FailedCheckResults(bundle.uuid));
         }
 
         Ok(SanitizedBundle {
