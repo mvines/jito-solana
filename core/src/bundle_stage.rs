@@ -762,6 +762,8 @@ impl BundleStage {
                 current_tip_receiver,
                 my_kp.pubkey()
             );
+                    let y = tip_manager.get_tip_accounts();
+                    info!("[billtip] tip accounts: {:?}", y);
                     let sanitized_bundle = SanitizedBundle {
                         transactions: vec![tip_manager.change_tip_receiver_tx(
                             &my_kp.pubkey(),
@@ -824,6 +826,7 @@ impl BundleStage {
                 }
                 Some(locked_bundle) => {
                     let tip_pdas = tip_manager.get_tip_accounts();
+                    info!("[billtip] tip accounts: {:?}", tip_pdas);
                     if Self::bundle_touches_tip_pdas(
                         &locked_bundle.sanitized_bundle().transactions,
                         &tip_pdas,
