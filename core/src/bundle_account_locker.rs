@@ -25,7 +25,7 @@ use {
     uuid::Uuid,
 };
 
-pub const MAX_PACKETS_PER_BUNDLE: usize = 5;
+pub const MAX_PACKETS_PER_BUNDLE: usize = 100;
 
 #[derive(Error, Debug, PartialEq, Eq, Clone)]
 pub enum BundleSchedulerError {
