@@ -26,7 +26,7 @@ pub struct MerkleTree {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct ProofEntry<'a>(&'a Hash, Option<&'a Hash>, Option<&'a Hash>);
+pub struct ProofEntry<'a>(&'a Hash, pub Option<&'a Hash>, pub Option<&'a Hash>);
 
 impl<'a> ProofEntry<'a> {
     pub fn new(
@@ -40,7 +40,7 @@ impl<'a> ProofEntry<'a> {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct Proof<'a>(Vec<ProofEntry<'a>>);
+pub struct Proof<'a>(pub Vec<ProofEntry<'a>>);
 
 impl<'a> Proof<'a> {
     pub fn push(&mut self, entry: ProofEntry<'a>) {

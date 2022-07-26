@@ -35,3 +35,7 @@ path = "src/bin/stake-meta-generator.rs"
 [[bin]]
 name = "merkle-root-generator"
 path = "src/bin/merkle-root-generator.rs"
+
+[[bin]]
+name = "claim-tips"
+path = "src/claim-tips.rs"

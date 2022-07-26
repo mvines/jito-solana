@@ -30,9 +30,11 @@ fn main() {
     info!("Claiming tips...");
 
     let args: Args = Args::parse();
-    info!("tree: {:?}", read_from_json_file(args.generated_merkle_tree_path));
+    let tree = read_from_json_file(args.generated_merkle_tree_path).expect("to read json file");
+    info!("tree: {:?}", tree);
 }
 
+// TODO: ugly
 fn read_from_json_file(
     file_path: PathBuf,
 ) -> Result<GeneratedMerkleTreeCollection, Error> {

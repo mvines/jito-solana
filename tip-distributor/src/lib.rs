@@ -28,6 +28,7 @@ use {
     },
     tip_distribution::state::TipDistributionAccount,
 };
+use solana_merkle_tree::merkle_tree::Proof;
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct GeneratedMerkleTreeCollection {
@@ -68,7 +69,7 @@ impl GeneratedMerkleTreeCollection {
             })
             .filter_map(|stake_meta| {
                 // Build the tree
-                let tree_nodes = match TreeNode::vec_from_stake_meta(&stake_meta) {
+                let mut tree_nodes = match TreeNode::vec_from_stake_meta(&stake_meta) {
                     Err(e) => return Some(Err(e)),
                     Ok(maybe_tree_nodes) => maybe_tree_nodes,
                 }?;
@@ -85,10 +86,30 @@ impl GeneratedMerkleTreeCollection {
                         Ok(tip_distribution_account) => tip_distribution_account,
                     };
 
+                let merkle_tree = MerkleTree::new(&hashed_nodes[..]);
+                let max_num_nodes = tree_nodes.len() as u64;
+
+                let mut i = 0;
+                while i < tree_nodes.len() {
+                    let mut proof = Vec::new();
+                    let path = merkle_tree.find_path(i).expect("path to index");
+                    for branch in path.0 {
+                        if let Some(hash) = branch.1 {
+                            proof.push(hash.to_bytes());
+                        } else if let Some(hash) = branch.2 {
+                            proof.push(hash.to_bytes());
+                        } else {
+                            panic!("expected some hash at each level of the tree");
+                        }
+                    }
+                    tree_nodes[i].proof = Some(proof);
+                    i+=1;
+                }
+
                 Some(Ok(GeneratedMerkleTree {
-                    max_num_nodes: tree_nodes.len() as u64,
+                    max_num_nodes,
                     tip_distribution_account,
-                    merkle_tree: MerkleTree::new(&hashed_nodes[..]),
+                    merkle_tree,
                     tree_nodes,
                     max_total_claim: tip_distribution_meta.total_tips,
                 }))
@@ -104,13 +125,15 @@ impl GeneratedMerkleTreeCollection {
     }
 }
 
-#[derive(Eq, Debug, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Eq, Debug, Hash, PartialEq, Deserialize, Serialize)]
 pub struct TreeNode {
     /// The account entitled to redeem.
     pub claimant: Pubkey,
 
     /// The amount this account is entitled to.
     pub amount: u64,
+
+    pub proof: Option<Vec<[u8; 32]>>,
 }
 
 impl TreeNode {
@@ -163,6 +186,7 @@ impl TreeNode {
                     Ok(TreeNode {
                         claimant: delegation.stake_account.parse().map_err(|_| Error::Base58DecodeError)?,
                         amount: amount.to_u64().unwrap(),
+                        proof: None
                     })
                 })
                 .collect::<Result<Vec<TreeNode>, Error>>()?;
@@ -172,6 +196,7 @@ impl TreeNode {
                     tip_distribution_meta.total_tips,
                     tip_distribution_meta.validator_fee_bps,
                 ),
+                proof: None
             });
 
             let total_claim_amount = tree_nodes.iter().fold(0u64, |sum, tree_node| {
@@ -545,14 +570,17 @@ mod tests {
             TreeNode {
                 claimant: stake_account_0.parse().unwrap(),
                 amount: 151_507,
+                proof: None
             },
             TreeNode {
                 claimant: stake_account_1.parse().unwrap(),
                 amount: 176_624,
+                proof: None
             },
             TreeNode {
                 claimant: validator_vote_account_0.parse().unwrap(),
                 amount: 19_001_221_110,
+                proof: None
             },
         ];
         let hashed_nodes: Vec<[u8; 32]> = tree_nodes.iter().map(|n| n.hash().to_bytes()).collect();
@@ -572,14 +600,17 @@ mod tests {
             TreeNode {
                 claimant: stake_account_2.parse().unwrap(),
                 amount: 166_327,
+                proof: None
             },
             TreeNode {
                 claimant: stake_account_3.parse().unwrap(),
                 amount: 519_145_817,
+                proof: None
             },
             TreeNode {
                 claimant: validator_vote_account_1.parse().unwrap(),
                 amount: 38_002_442_227,
+                proof: None
             },
         ];
         let hashed_nodes: Vec<[u8; 32]> = tree_nodes.iter().map(|n| n.hash().to_bytes()).collect();
