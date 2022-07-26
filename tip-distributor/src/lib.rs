@@ -514,24 +514,38 @@ mod tests {
         // This is the function MerkleTree uses, so if we hash our hashed_node with it, we should see
         // it show up in the node vector
         let node = &hashed_nodes[0].clone();
-        let test_node = hash_leaf!(node);
+        let hashed_node = hash_leaf!(node);
 
-        msg!("merkle vec: {:?}\nhashed_node: {:?}", mk.nodes, test_node);
+        msg!("merkle vec: {:?}\nhashed_node: {:?}", mk.nodes, hashed_node);
 
         let proof = get_proof(&mk, 0);
 
-        msg!("proof: {:?}", proof);
+        msg!("proof: {:?}", proof[0]);
 
         // The code below is used in claim function
         // Verify the merkle proof.
         let node = anchor_lang::solana_program::keccak::hashv(&[
-            &[0],
+            &[0u8],
             &tree_nodes[0].claimant.to_bytes(),
             &tree_nodes[0].amount.to_le_bytes(),
         ]);
 
         msg!("node after hashing in verify: {:?}", node);
-        assert!(merkle_proof::verify(proof, mk.nodes[mk.nodes.len()-1].to_bytes(), node.0));
+        // assert its not working
+        assert!(!merkle_proof::verify(proof.clone(), mk.nodes[mk.nodes.len()-1].to_bytes(), node.0));
+
+        ////// Fixed?
+        let mk = MerkleTree::new_with_sorting(&hashed_nodes[..]);
+        let node = solana_program::hash::hashv(&[
+            &[0u8],
+            &node.0,
+        ]);
+        let proof = get_proof(&mk, 0);
+        msg!("node after fixed hashing in verify: {:?}", node);
+        msg!("proof after fix: {:?}", proof[0]);
+        assert!(merkle_proof::verify_fixed(proof, mk.nodes[mk.nodes.len()-1].to_bytes(), node.to_bytes()));
+
+
     }
 
     #[test]
