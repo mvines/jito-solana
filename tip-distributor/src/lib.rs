@@ -29,7 +29,7 @@ use {
     tip_distribution::state::TipDistributionAccount,
 };
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct GeneratedMerkleTreeCollection {
     pub generated_merkle_trees: Vec<GeneratedMerkleTree>,
     pub bank_hash: String,
@@ -37,10 +37,10 @@ pub struct GeneratedMerkleTreeCollection {
     pub slot: Slot,
 }
 
-#[derive(Eq, Debug, Hash, PartialEq, Serialize)]
+#[derive(Eq, Debug, Hash, PartialEq, Deserialize, Serialize)]
 pub struct GeneratedMerkleTree {
     pub tip_distribution_account: Pubkey,
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, skip_deserializing)]
     pub merkle_tree: MerkleTree,
     pub tree_nodes: Vec<TreeNode>,
     pub max_total_claim: u64,
@@ -104,7 +104,7 @@ impl GeneratedMerkleTreeCollection {
     }
 }
 
-#[derive(Eq, Debug, Hash, PartialEq, Serialize)]
+#[derive(Eq, Debug, Hash, PartialEq, Deserialize, Serialize)]
 pub struct TreeNode {
     /// The account entitled to redeem.
     pub claimant: Pubkey,

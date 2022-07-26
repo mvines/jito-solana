@@ -1,61 +1,60 @@
-//! This binary generates a merkle tree for each [TipDistributionAccount]; they are derived
-//! using a user provided [StakeMetaCollection] JSON file. The roots are then uploaded to their
-//! their [TipDistributionAccount] as long as the provided keypair is the
-//! `merkle_root_upload_authority`. All funds minus the validator's commission are distributed
-//! to delegated accounts proportional to their amounts delegated.
+//! TODO COMMENT
 
-use {
-    clap::Parser, log::*, solana_sdk::signature::read_keypair_file,
-    solana_tip_distributor::merkle_root_generator_workflow::run_workflow, std::path::PathBuf,
-};
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::path::{Path, PathBuf};
+use log::info;
+use solana_tip_distributor::GeneratedMerkleTreeCollection;
+use clap::Parser;
+use thiserror::Error as ThisError;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
-    /// The path to the keypair used to sign the `upload_merkle_root` transactions.
-    /// This will skip uploading to accounts where `merkle_root_upload_authority`
-    /// does not match this keypair.
+    /// Path to JSON file containing the [GeneratedMerkleTreeCollection] object.
     #[clap(long, env)]
-    path_to_my_keypair: PathBuf,
+    generated_merkle_tree_path: PathBuf,
+}
 
-    /// Path to JSON file containing the [StakeMetaCollection] object.
-    #[clap(long, env)]
-    stake_meta_coll_path: PathBuf,
+#[derive(ThisError, Debug)]
+pub enum Error {
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
 
-    /// The RPC to send transactions to.
-    #[clap(long, env)]
-    rpc_url: String,
-
-    /// Path to JSON file to get populated with tree node data.
-    #[clap(long, env)]
-    out_path: String,
-
-    /// Indicates whether or not to actually upload roots to their respective
-    /// [TipDistributionAccount]'s  
-    #[clap(long, env)]
-    upload_roots: bool,
-
-    /// If true then this will upload the merkle-root disregarding whether one's been uploaded already.
-    #[clap(long, env)]
-    force_upload_root: Option<bool>,
+    #[error(transparent)]
+    SerdeJsonError(#[from] serde_json::Error),
 }
 
 fn main() {
     env_logger::init();
-    info!("Starting merkle-root-generator workflow...");
+    info!("Claiming tips...");
 
     let args: Args = Args::parse();
-
-    let my_keypair =
-        read_keypair_file(&args.path_to_my_keypair).expect("Failed to read keypair file.");
-
-    run_workflow(
-        args.stake_meta_coll_path,
-        args.out_path,
-        args.rpc_url,
-        my_keypair,
-        args.upload_roots,
-        args.force_upload_root.unwrap_or_default(),
-    )
-    .unwrap();
+    info!("tree: {:?}", read_from_json_file(args.generated_merkle_tree_path));
 }
+
+fn read_from_json_file(
+    file_path: PathBuf,
+) -> Result<GeneratedMerkleTreeCollection, Error> {
+    let file = File::open(file_path)?;
+    let mut buf_reader = BufReader::new(file);
+    let mut s = String::new();
+    buf_reader.read_to_string(&mut s)?;
+    Ok(serde_json::from_str(&*s)?)
+}
+
+//pub struct ClaimArgs {
+//    pub proof: Vec<[u8; 32]>,
+//    pub amount: u64,
+//    pub index: u64,
+//    pub bump: u8,
+//}
+//pub struct ClaimAccounts {
+//    pub config: Pubkey,
+//    pub tip_distribution_account: Pubkey,
+//    pub claim_status: Pubkey,
+//    pub claimant: Pubkey,
+//    pub payer: Pubkey,
+//    pub system_program: Pubkey,
+//}
+//pub fn claim_ix(program_id: Pubkey, args: ClaimArgs, accounts: ClaimAccounts) -> Instruction {

@@ -5760,6 +5760,7 @@ dependencies = [
  "fast-math",
  "hex",
  "matches",
+ "serde",
  "solana-program 1.11.2",
 ]
 

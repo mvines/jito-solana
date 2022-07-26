@@ -1,4 +1,5 @@
 use solana_program::hash::{hashv, Hash};
+use serde::Deserialize;
 
 // We need to discern between leaf and intermediate nodes to prevent trivial second
 // pre-image attacks.
@@ -18,7 +19,7 @@ macro_rules! hash_intermediate {
     }
 }
 
-#[derive(Debug, Eq, Hash, PartialEq)]
+#[derive(Default, Debug, Eq, Hash, PartialEq, Deserialize)]
 pub struct MerkleTree {
     leaf_count: usize,
     nodes: Vec<Hash>,
