@@ -24,6 +24,7 @@ solana-merkle-tree = { path = "../merkle-tree", version = "=1.11.2" }
 solana-runtime = { path = "../runtime", version = "=1.11.2" }
 solana-sdk = { path = "../sdk", version = "=1.11.2" }
 solana-stake-program = { path = "../programs/stake", version = "=1.11.2" }
+solana-program = "=1.11.3"
 thiserror = "1.0.31"
 tip-distribution = { path = "../jito-programs/tip-payment/programs/tip-distribution", features = ["no-entrypoint"] }
 tokio = { version = "1.12.0", features = ["rt-multi-thread", "macros", "sync", "time", "full"] }

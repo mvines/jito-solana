@@ -7,6 +7,7 @@ use serde::Deserialize;
 const LEAF_PREFIX: &[u8] = &[0];
 const INTERMEDIATE_PREFIX: &[u8] = &[1];
 
+#[macro_export]
 macro_rules! hash_leaf {
     {$d:ident} => {
         hashv(&[LEAF_PREFIX, $d])
@@ -22,7 +23,7 @@ macro_rules! hash_intermediate {
 #[derive(Default, Debug, Eq, Hash, PartialEq, Deserialize)]
 pub struct MerkleTree {
     leaf_count: usize,
-    nodes: Vec<Hash>,
+    pub nodes: Vec<Hash>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

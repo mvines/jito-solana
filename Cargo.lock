@@ -6521,6 +6521,7 @@ dependencies = [
  "solana-genesis-utils",
  "solana-ledger",
  "solana-merkle-tree",
+ "solana-program 1.11.3",
  "solana-runtime",
  "solana-sdk 1.11.2",
  "solana-stake-program",

@@ -91,18 +91,7 @@ impl GeneratedMerkleTreeCollection {
 
                 let mut i = 0;
                 while i < tree_nodes.len() {
-                    let mut proof = Vec::new();
-                    let path = merkle_tree.find_path(i).expect("path to index");
-                    for branch in path.0 {
-                        if let Some(hash) = branch.1 {
-                            proof.push(hash.to_bytes());
-                        } else if let Some(hash) = branch.2 {
-                            proof.push(hash.to_bytes());
-                        } else {
-                            panic!("expected some hash at each level of the tree");
-                        }
-                    }
-                    tree_nodes[i].proof = Some(proof);
+                    tree_nodes[i].proof = Some(get_proof(&merkle_tree, i));
                     i+=1;
                 }
 
@@ -123,6 +112,21 @@ impl GeneratedMerkleTreeCollection {
             slot: stake_meta_coll.slot,
         })
     }
+}
+
+pub fn get_proof(merkle_tree: &MerkleTree, i: usize) -> Vec<[u8; 32]> {
+    let mut proof = Vec::new();
+    let path = merkle_tree.find_path(i).expect("path to index");
+    for branch in path.0 {
+        if let Some(hash) = branch.1 {
+            proof.push(hash.to_bytes());
+        } else if let Some(hash) = branch.2 {
+            proof.push(hash.to_bytes());
+        } else {
+            panic!("expected some hash at each level of the tree");
+        }
+    }
+    proof
 }
 
 #[derive(Clone, Eq, Debug, Hash, PartialEq, Deserialize, Serialize)]
@@ -473,7 +477,62 @@ mod math {
 
 #[cfg(test)]
 mod tests {
+    use tip_distribution::merkle_proof;
     use {super::*, solana_sdk::bs58};
+    use solana_merkle_tree::hash_leaf;
+    use solana_program::hash::{hashv, Hash};
+    use solana_sdk::msg;
+
+    #[test]
+    fn test_merkle_tree_verify() {
+        const LEAF_PREFIX: &[u8] = &[0];
+
+        // Create the merkle tree and proofs
+        let acct_0 = bs58::encode(Pubkey::new_unique().as_ref()).into_string();
+        let acct_1 = bs58::encode(Pubkey::new_unique().as_ref()).into_string();
+
+        let tree_nodes = vec![
+            TreeNode {
+                claimant: acct_0.parse().unwrap(),
+                amount: 151_507,
+                proof: None
+            },
+            TreeNode {
+                claimant: acct_1.parse().unwrap(),
+                amount: 176_624,
+                proof: None
+            },
+        ];
+
+        // First the nodes are hashed
+        let hashed_nodes: Vec<[u8; 32]> = tree_nodes.iter().map(|n| n.hash().to_bytes()).collect();
+        msg!("hashed_nodes: {:?}", hashed_nodes);
+
+        // Then the nodes are sent to MerkleTree which *again* hashes them
+        let mk = MerkleTree::new(&hashed_nodes[..]);
+
+        // This is the function MerkleTree uses, so if we hash our hashed_node with it, we should see
+        // it show up in the node vector
+        let node = &hashed_nodes[0].clone();
+        let test_node = hash_leaf!(node);
+
+        msg!("merkle vec: {:?}\nhashed_node: {:?}", mk.nodes, test_node);
+
+        let proof = get_proof(&mk, 0);
+
+        msg!("proof: {:?}", proof);
+
+        // The code below is used in claim function
+        // Verify the merkle proof.
+        let node = anchor_lang::solana_program::keccak::hashv(&[
+            &[0],
+            &tree_nodes[0].claimant.to_bytes(),
+            &tree_nodes[0].amount.to_le_bytes(),
+        ]);
+
+        msg!("node after hashing in verify: {:?}", node);
+        assert!(merkle_proof::verify(proof, mk.nodes[mk.nodes.len()-1].to_bytes(), node.0));
+    }
 
     #[test]
     fn test_new_from_stake_meta_collection_happy_path() {
