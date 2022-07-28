@@ -93,7 +93,6 @@ impl LockedBundle {
 
 #[derive(Clone)]
 pub struct BundleLockerSanitizer {
-    num_bundles_prelock: u64,
     blacklisted_accounts: HashSet<Pubkey>,
 
     // mutable state
@@ -150,79 +149,78 @@ impl BundleLockerSanitizer {
         self.write_locks.clear();
     }
 
-    /// Pop bundles off unlocked bundles deque, performs pre-execution checks, and
-    /// returns a bundle and all the failures that occured.
-    /// Ensures the locked_bundles deque is refilled.
-    pub fn pop(
+    pub fn refresh_locked_bundle(
         &mut self,
+        locked_bundle: LockedBundle,
         bank: &Arc<Bank>,
         consensus_accounts_cache: &HashSet<Pubkey>,
-    ) -> Option<LockedBundle> {
-        // pre-lock bundles up to num_bundle_batches_prelock
-        // +1 because it will immediately pop one off
-        while !self.unlocked_bundles.is_empty()
-            && self.locked_bundles.len() <= self.num_bundles_prelock as usize + 1
-        {
-            let mut bundle = self.unlocked_bundles.pop_front().unwrap();
-            match Self::get_lockable_bundle(
-                &mut bundle,
-                bank,
-                &self.blacklisted_accounts,
-                consensus_accounts_cache,
-            ) {
-                Ok(locked_bundle) => {
-                    self.lock_bundle_accounts(&locked_bundle);
-                    self.locked_bundles.push_back(locked_bundle);
-                }
-                Err(e) => {
-                    error!("error locking bundle: {:?}", e);
-                }
+    ) -> Result<LockedBundle> {
+        // while !self.locked_bundles.is_empty() {
+        //     // SAFETY: only runs this loop if it's not empty, unwrap shall always succeed
+        //     let mut old_locked_bundle = self.locked_bundles.pop_front().unwrap();
+        //
+        //     // NOTE: the bank may have changed between when the transaction when originally
+        //     // locked and this moment in time
+        //     let new_locked_bundle = match Self::get_lockable_bundle(
+        //         old_locked_bundle.packet_bundle_mut(),
+        //         bank,
+        //         &self.blacklisted_accounts,
+        //         consensus_accounts_cache,
+        //     ) {
+        //         Ok(new_locked_bundle) => new_locked_bundle,
+        //         Err(e) => {
+        //             error!("dropping bundle error: {:?}", e);
+        //             self.unlock_bundle_accounts(old_locked_bundle);
+        //             continue;
+        //         }
+        //     };
+        //
+        //     // even though we don't allow address table lookups in bundles, banking stage
+        //     // could have executed a transaction that changed the lookup table in the bank in between
+        //     // when the bundle was inserted into the locked_bundles queue and when it's ready to execute
+        //     if new_locked_bundle.read_locks() != old_locked_bundle.read_locks()
+        //         || new_locked_bundle.write_locks() != old_locked_bundle.write_locks()
+        //     {
+        //         self.unlock_bundle_accounts(old_locked_bundle);
+        //         self.lock_bundle_accounts(&new_locked_bundle);
+        //     }
+        //
+        //     return Some(new_locked_bundle);
+        // }
+        // None
+        // TODO (LB): do this
+        Err(BundleSchedulerError::BlacklistedAccount(Uuid::new_v4()))
+    }
+
+    /// Performs sanity checks, locks a bundle, and returns it
+    pub fn get_locked_bundle(
+        &mut self,
+        packet_bundle: PacketBundle,
+        bank: &Arc<Bank>,
+        consensus_accounts_cache: &HashSet<Pubkey>,
+    ) -> Result<LockedBundle> {
+        match Self::get_lockable_bundle(
+            packet_bundle,
+            bank,
+            &self.blacklisted_accounts,
+            consensus_accounts_cache,
+        ) {
+            Ok(locked_bundle) => {
+                self.lock_bundle_accounts(&locked_bundle);
+                Ok(locked_bundle)
             }
+            Err(e) => Err(e),
         }
-
-        while !self.locked_bundles.is_empty() {
-            // SAFETY: only runs this loop if it's not empty, unwrap shall always succeed
-            let mut old_locked_bundle = self.locked_bundles.pop_front().unwrap();
-
-            // NOTE: the bank may have changed between when the transaction when originally
-            // locked and this moment in time
-            let new_locked_bundle = match Self::get_lockable_bundle(
-                old_locked_bundle.packet_bundle_mut(),
-                bank,
-                &self.blacklisted_accounts,
-                consensus_accounts_cache,
-            ) {
-                Ok(new_locked_bundle) => new_locked_bundle,
-                Err(e) => {
-                    error!("dropping bundle error: {:?}", e);
-                    self.unlock_bundle_accounts(old_locked_bundle);
-                    continue;
-                }
-            };
-
-            // even though we don't allow address table lookups in bundles, banking stage
-            // could have executed a transaction that changed the lookup table in the bank in between
-            // when the bundle was inserted into the locked_bundles queue and when it's ready to execute
-            if new_locked_bundle.read_locks() != old_locked_bundle.read_locks()
-                || new_locked_bundle.write_locks() != old_locked_bundle.write_locks()
-            {
-                self.unlock_bundle_accounts(old_locked_bundle);
-                self.lock_bundle_accounts(&new_locked_bundle);
-            }
-
-            return Some(new_locked_bundle);
-        }
-        None
     }
 
     fn get_lockable_bundle(
-        packet_bundle: &mut PacketBundle,
+        packet_bundle: PacketBundle,
         bank: &Arc<Bank>,
         blacklisted_accounts: &HashSet<Pubkey>,
         consensus_accounts_cache: &HashSet<Pubkey>,
     ) -> Result<LockedBundle> {
         let sanitized_bundle = Self::get_sanitized_bundle(
-            packet_bundle,
+            &packet_bundle,
             bank,
             blacklisted_accounts,
             consensus_accounts_cache,
@@ -328,7 +326,7 @@ impl BundleLockerSanitizer {
     ///  Contains duplicate transactions within the same bundle.
     ///  Contains a transaction that was already processed or one with an invalid blockhash.
     fn get_sanitized_bundle(
-        bundle: &mut PacketBundle,
+        bundle: &PacketBundle,
         bank: &Arc<Bank>,
         blacklisted_accounts: &HashSet<Pubkey>,
         consensus_accounts_cache: &HashSet<Pubkey>,
@@ -340,7 +338,10 @@ impl BundleLockerSanitizer {
         if bundle.batch.is_empty()
             || bundle.batch.len() > MAX_PACKETS_PER_BUNDLE
             || bundle.batch.iter().any(|p| p.meta.discard())
-            || bundle.batch.iter_mut().any(|p| !verify_packet(p, false))
+            || bundle
+                .batch
+                .iter()
+                .any(|p| !verify_packet(&mut p.clone(), false))
         {
             return Err(BundleSchedulerError::FailedPacketBatchPreCheck(bundle.uuid));
         }
@@ -482,7 +483,7 @@ mod tests {
         assert_eq!(bundle_account_locker.num_bundles(), 1);
 
         let locked_bundle = bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .unwrap();
         assert_eq!(locked_bundle.sanitized_bundle.transactions.len(), 1);
         assert_eq!(
@@ -547,7 +548,7 @@ mod tests {
         assert_eq!(bundle_account_locker.num_bundles(), 1);
 
         let locked_bundle = bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .unwrap();
         assert_eq!(locked_bundle.sanitized_bundle.transactions.len(), 2);
         assert_eq!(
@@ -620,7 +621,7 @@ mod tests {
         assert_eq!(bundle_account_locker.num_bundles(), 2);
 
         let locked_bundle = bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .unwrap();
         assert_eq!(locked_bundle.sanitized_bundle.transactions.len(), 1);
         assert_eq!(
@@ -654,7 +655,7 @@ mod tests {
 
         // this shall be packet_bundle_2
         let locked_bundle = bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .unwrap();
         assert_eq!(locked_bundle.sanitized_bundle.transactions.len(), 1);
         assert_eq!(
@@ -712,7 +713,7 @@ mod tests {
         // fails to pop because bundle mentions consensus_accounts_cache
         let consensus_accounts_cache = HashSet::from([kp.pubkey()]);
         assert!(bundle_account_locker
-            .pop(&bank, &consensus_accounts_cache)
+            .get_locked_bundle(&bank, &consensus_accounts_cache)
             .is_none());
 
         assert_eq!(bundle_account_locker.num_bundles(), 0);
@@ -754,7 +755,7 @@ mod tests {
 
         // fails to pop because bundle it locks the same transaction twice
         assert!(bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .is_none());
         assert_eq!(bundle_account_locker.num_bundles(), 0);
         assert!(bundle_account_locker.read_locks().is_empty());
@@ -790,7 +791,7 @@ mod tests {
 
         // fails to pop because bundle has bad blockhash
         assert!(bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .is_none());
         assert_eq!(bundle_account_locker.num_bundles(), 0);
         assert!(bundle_account_locker.read_locks().is_empty());
@@ -829,7 +830,7 @@ mod tests {
         assert_eq!(bundle_account_locker.num_bundles(), 1);
 
         let locked_bundle = bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .unwrap();
 
         let results = bank
@@ -848,7 +849,7 @@ mod tests {
         bundle_account_locker.push(vec![packet_bundle]);
 
         assert!(bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .is_none());
         assert_eq!(bundle_account_locker.num_bundles(), 0);
         assert!(bundle_account_locker.read_locks().is_empty());
@@ -901,7 +902,7 @@ mod tests {
 
         // fails to pop because bundle mentions tip program
         assert!(bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .is_none());
 
         assert_eq!(bundle_account_locker.num_bundles(), 0);
@@ -940,7 +941,7 @@ mod tests {
 
         // fails to pop because bundle mentions the txV2 program
         assert!(bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .is_none());
 
         assert_eq!(bundle_account_locker.num_bundles(), 0);
@@ -965,7 +966,7 @@ mod tests {
         assert_eq!(bundle_account_locker.num_bundles(), 1);
         // fails to pop because empty bundle
         assert!(bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .is_none());
     }
 
@@ -1001,7 +1002,7 @@ mod tests {
         assert_eq!(bundle_account_locker.num_bundles(), 1);
         // fails to pop because too many packets in a bundle
         assert!(bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .is_none());
     }
 
@@ -1037,7 +1038,7 @@ mod tests {
         assert_eq!(bundle_account_locker.num_bundles(), 1);
         // fails to pop because one of the packets is marked as discard
         assert!(bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .is_none());
     }
 
@@ -1079,7 +1080,7 @@ mod tests {
         assert_eq!(bundle_account_locker.num_bundles(), 1);
         // fails to pop because one of the packets is marked as discard
         assert!(bundle_account_locker
-            .pop(&bank, &HashSet::default())
+            .get_locked_bundle(&bank, &HashSet::default())
             .is_none());
     }
 }
