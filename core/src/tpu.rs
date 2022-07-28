@@ -5,7 +5,7 @@ use {
     crate::{
         banking_stage::BankingStage,
         broadcast_stage::{BroadcastStage, BroadcastStageType, RetransmitSlotsReceiver},
-        bundle_account_locker::BundleAccountLocker,
+        bundle_locker_sanitizer::BundleLockerSanitizer,
         bundle_stage::BundleStage,
         cluster_info_vote_listener::{
             ClusterInfoVoteListener, GossipDuplicateConfirmedSlotsSender,
@@ -49,8 +49,6 @@ pub const DEFAULT_TPU_COALESCE_MS: u64 = 5;
 
 // allow multiple connections for NAT and any open/close overlap
 pub const MAX_QUIC_CONNECTIONS_PER_IP: usize = 8;
-
-const NUM_BUNDLES_PRE_LOCK: u64 = 4;
 
 pub struct TpuSockets {
     pub transactions: Vec<UdpSocket>,
@@ -246,8 +244,7 @@ impl Tpu {
 
         let tip_manager = TipManager::new(tip_manager_config);
 
-        let bundle_account_locker = Arc::new(Mutex::new(BundleAccountLocker::new(
-            NUM_BUNDLES_PRE_LOCK,
+        let bundle_account_locker = Arc::new(Mutex::new(BundleLockerSanitizer::new(
             &tip_manager.tip_payment_program_id(),
         )));
 

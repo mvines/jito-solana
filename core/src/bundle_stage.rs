@@ -5,12 +5,12 @@ use {
     crate::{
         banking_stage::BatchedTransactionDetails,
         bundle::PacketBundle,
-        bundle_account_locker::BundleAccountLocker,
+        bundle_locker_sanitizer::{BundleLockerSanitizer, LockedBundle},
         leader_slot_banking_stage_timing_metrics::LeaderExecuteAndCommitTimings,
         qos_service::{CommitTransactionDetails, QosService},
         tip_manager::TipManager,
     },
-    crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError},
+    crossbeam_channel::{tick, Receiver, RecvTimeoutError, TryRecvError},
     solana_entry::entry::hash_transactions,
     solana_gossip::cluster_info::ClusterInfo,
     solana_ledger::blockstore_processor::TransactionStatusSender,
@@ -49,7 +49,7 @@ use {
         TransactionTokenBalancesSet,
     },
     std::{
-        collections::{HashMap, HashSet},
+        collections::{HashMap, HashSet, VecDeque},
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, Mutex, RwLock,
@@ -86,7 +86,7 @@ impl BundleStage {
         bundle_receiver: Receiver<Vec<PacketBundle>>,
         exit: Arc<AtomicBool>,
         tip_manager: TipManager,
-        bundle_account_locker: Arc<Mutex<BundleAccountLocker>>,
+        bundle_account_locker: Arc<Mutex<BundleLockerSanitizer>>,
     ) -> Self {
         Self::start_bundle_thread(
             cluster_info,
@@ -112,7 +112,7 @@ impl BundleStage {
         bundle_receiver: Receiver<Vec<PacketBundle>>,
         exit: Arc<AtomicBool>,
         tip_manager: TipManager,
-        bundle_account_locker: Arc<Mutex<BundleAccountLocker>>,
+        bundle_account_locker: Arc<Mutex<BundleLockerSanitizer>>,
         max_bundle_retry_duration: Duration,
     ) -> Self {
         let poh_recorder = poh_recorder.clone();
@@ -644,13 +644,14 @@ impl BundleStage {
     /// Read as many bundles off the chanel without blocking
     fn try_recv_bundles(
         bundle_receiver: &Receiver<Vec<PacketBundle>>,
-        bundle_account_locker: &Arc<Mutex<BundleAccountLocker>>,
+        unprocessed_bundles: &mut VecDeque<PacketBundle>,
     ) -> BundleExecutionResult<()> {
-        let mut bundle_account_locker_l = bundle_account_locker.lock().unwrap();
         loop {
             match bundle_receiver.try_recv() {
                 Ok(bundles) => {
-                    bundle_account_locker_l.push(bundles);
+                    for b in bundles {
+                        unprocessed_bundles.push_back(b);
+                    }
                 }
                 Err(TryRecvError::Disconnected) => {
                     return Err(BundleExecutionError::Shutdown);
@@ -662,66 +663,33 @@ impl BundleStage {
 
     /// Schedules bundles until the validator is a leader, at which point it returns a bank and
     /// bundle_account_locker with >= 1 bundle to be executed
+    /// TODO (LB): need to make sure bundle_account_locker is cleaned up at the end of the leader schedule!!!!!!
     fn schedule_bundles_until_leader(
         bundle_receiver: &Receiver<Vec<PacketBundle>>,
-        bundle_account_locker: &Arc<Mutex<BundleAccountLocker>>,
+        unprocessed_bundles: &mut VecDeque<PacketBundle>,
         poh_recorder: &Arc<RwLock<PohRecorder>>,
     ) -> BundleExecutionResult<BankStart> {
         // drop bundles if not within this slot range
         const DROP_BUNDLE_SLOT_OFFSET: u64 = 4;
-
         loop {
-            let r_poh_recorder = poh_recorder.read().unwrap();
+            let (working_bank_start, would_be_leader_soon, is_leader_now) = {
+                let r_poh_recorder = poh_recorder.read().unwrap();
+                let poh_recorder_bank = r_poh_recorder.get_poh_recorder_bank();
+                let working_bank_start = poh_recorder_bank.working_bank_start();
+                let would_be_leader_soon = r_poh_recorder
+                    .would_be_leader(DROP_BUNDLE_SLOT_OFFSET * DEFAULT_TICKS_PER_SLOT);
+                let is_leader_now =
+                    PohRecorder::get_working_bank_if_not_expired(&working_bank_start).is_some();
+                (working_bank_start, would_be_leader_soon, is_leader_now)
+            };
 
-            let poh_recorder_bank = r_poh_recorder.get_poh_recorder_bank();
-            let working_bank_start = poh_recorder_bank.working_bank_start();
-            let would_be_leader_soon =
-                r_poh_recorder.would_be_leader(DROP_BUNDLE_SLOT_OFFSET * DEFAULT_TICKS_PER_SLOT);
-            let is_leader_now =
-                PohRecorder::get_working_bank_if_not_expired(&working_bank_start).is_some();
-
-            drop(r_poh_recorder);
-
-            // leader now with bundles to execute, drain the rest off the channel and run them
-            if is_leader_now && bundle_account_locker.lock().unwrap().num_bundles() > 0 {
-                Self::try_recv_bundles(bundle_receiver, bundle_account_locker)?;
+            if is_leader_now && !unprocessed_bundles.is_empty() {
+                unprocessed_bundles.extend(bundle_receiver.try_iter());
                 return Ok(working_bank_start.unwrap().clone());
             } else {
-                // don't block too long because we want to pick up the working bank as fast as possible
-                // if we're transitioning from not leader -> leader and there's no new bundles to read
-                // but bundles already pushed into the account locker
-                match bundle_receiver.recv_timeout(Duration::from_millis(10)) {
-                    Ok(bundles) => {
-                        // buffer bundles if leader now or soon
-                        if is_leader_now || would_be_leader_soon {
-                            bundle_account_locker.lock().unwrap().push(bundles);
-                            Self::try_recv_bundles(bundle_receiver, bundle_account_locker)?;
-                        } else {
-                            // not leader now or soon, drop all buffered and new bundles
-                            let new_bundles_dropped: Vec<Uuid> =
-                                bundles.iter().map(|b| b.uuid).collect();
-                            let old_bundles_dropped = bundle_account_locker.lock().unwrap().clear();
-                            warn!(
-                                "dropping new and buffered bundles. new: {:?} buffered: {:?}",
-                                new_bundles_dropped, old_bundles_dropped
-                            );
-                        }
-                    }
-                    Err(RecvTimeoutError::Timeout) => {
-                        if !(is_leader_now || would_be_leader_soon) {
-                            // if not leader now and not leader soon and no new bundles, drop the buffered
-                            // bundles
-                            let bundles_dropped = bundle_account_locker.lock().unwrap().clear();
-                            if !bundles_dropped.is_empty() {
-                                warn!(
-                                    "not leader anymore, dropping buffered bundles: {:?}",
-                                    bundles_dropped
-                                );
-                            }
-                        }
-                    }
-                    Err(RecvTimeoutError::Disconnected) => {
-                        return Err(BundleExecutionError::Shutdown);
+                if let Ok(bundles) = bundle_receiver.recv() {
+                    if is_leader_now || would_be_leader_soon {
+                        unprocessed_bundles.extend(bundles);
                     }
                 }
             }
@@ -839,7 +807,7 @@ impl BundleStage {
     /// is finished.
     #[allow(clippy::too_many_arguments)]
     fn execute_bundles_until_empty_or_end_of_slot(
-        bundle_account_locker: &Arc<Mutex<BundleAccountLocker>>,
+        bundle_account_locker: &Arc<Mutex<BundleLockerSanitizer>>,
         bundle_receiver: &Receiver<Vec<PacketBundle>>,
         bank_start: BankStart,
         consensus_accounts_cache: &HashSet<Pubkey>,
@@ -956,7 +924,7 @@ impl BundleStage {
         cost_model: Arc<RwLock<CostModel>>,
         exit: Arc<AtomicBool>,
         tip_manager: TipManager,
-        bundle_account_locker: Arc<Mutex<BundleAccountLocker>>,
+        bundle_account_locker: Arc<Mutex<BundleLockerSanitizer>>,
         max_bundle_retry_duration: Duration,
     ) {
         let recorder = poh_recorder.read().unwrap().recorder();
@@ -965,6 +933,9 @@ impl BundleStage {
         let mut consensus_accounts_cache: HashSet<Pubkey> = HashSet::new();
         let mut last_consensus_update = Epoch::default();
 
+        let mut unprocessed_bundles: VecDeque<PacketBundle> = VecDeque::with_capacity(1000);
+        let mut locked_bundles: VecDeque<LockedBundle> = VecDeque::with_capacity(10);
+
         loop {
             if exit.load(Ordering::Relaxed) {
                 break;
@@ -972,7 +943,7 @@ impl BundleStage {
 
             match Self::schedule_bundles_until_leader(
                 &bundle_receiver,
-                &bundle_account_locker,
+                &mut unprocessed_bundles,
                 poh_recorder,
             ) {
                 Ok(bank_start) => {
@@ -1168,7 +1139,7 @@ mod tests {
         let cost_model = Arc::new(RwLock::new(CostModel::default()));
         let qos_service = QosService::new(cost_model, 0);
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
         let mut execute_and_commit_timings = LeaderExecuteAndCommitTimings::default();
         let bank_start = poh_recorder.read().unwrap().bank_start().unwrap();
         bundle_account_locker.push(bundle.clone());
@@ -1367,7 +1338,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
         bundle_account_locker.push(bundle);
         let locked_bundle = bundle_account_locker.pop(&bank, &HashSet::default());
 
@@ -1453,7 +1424,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
         bundle_account_locker.push(bundle);
         let locked_bundle = bundle_account_locker.pop(&bank, &HashSet::default());
 
@@ -1525,7 +1496,7 @@ mod tests {
         };
         let (exit, poh_recorder, poh_service, _entry_receiver) =
             create_test_recorder(&bank, &blockstore, Some(poh_config), None);
-        let bundle_account_locker = Arc::new(Mutex::new(BundleAccountLocker::new(
+        let bundle_account_locker = Arc::new(Mutex::new(BundleLockerSanitizer::new(
             NUM_BUNDLES_PRE_LOCK,
             &Pubkey::new_unique(),
         )));
@@ -1605,7 +1576,7 @@ mod tests {
         let sanitized_txs_1 = vec![SanitizedTransaction::from_transaction_for_tests(tx1)];
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
 
         // grab lock on tx1
         let _batch = bank.prepare_sanitized_batch(&sanitized_txs_1);

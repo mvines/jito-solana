@@ -30,23 +30,19 @@ pub const MAX_PACKETS_PER_BUNDLE: usize = 5;
 #[derive(Error, Debug, PartialEq, Eq, Clone)]
 pub enum BundleSchedulerError {
     #[error("Bundle locking error uuid: {0}")]
-    GetLocksError(Uuid),
-    #[error("Bundle contains invalid packets uuid: {0}")]
-    NoSerializedTransactions(Uuid),
+    LockingError(Uuid),
     #[error("Bundle contains a transaction that failed to serialize: {0}")]
     FailedToSerializeTransaction(Uuid),
     #[error("Bundle contains a duplicate transaction: {0}")]
     DuplicateTransaction(Uuid),
     #[error("Bundle failed check results: {0}")]
     FailedCheckResults(Uuid),
-    #[error("Bundle contains too many transactions: {0}")]
-    TooManyTransactions(Uuid),
-    #[error("Bundle contains packet marked as discard: {0}")]
-    PacketMarkedAsDiscard(Uuid),
-    #[error("Bundle contains no packets: {0}")]
-    EmptyPackets(Uuid),
-    #[error("Failed sigverify: {0}")]
-    FailedSigverify(Uuid),
+    #[error("Bundle packet batch failed pre-check: {0}")]
+    FailedPacketBatchPreCheck(Uuid),
+    #[error("Bank is in vote-only mode: {0}")]
+    VoteOnlyMode(Uuid),
+    #[error("Bundle mentions blacklisted account: {0}")]
+    BlacklistedAccount(Uuid),
 }
 
 pub type Result<T> = std::result::Result<T, BundleSchedulerError>;
@@ -96,70 +92,45 @@ impl LockedBundle {
 }
 
 #[derive(Clone)]
-pub struct BundleAccountLocker {
+pub struct BundleLockerSanitizer {
     num_bundles_prelock: u64,
     blacklisted_accounts: HashSet<Pubkey>,
 
     // mutable state
-    unlocked_bundles: VecDeque<PacketBundle>,
-    locked_bundles: VecDeque<LockedBundle>,
     read_locks: HashMap<Pubkey, u64>,
     write_locks: HashMap<Pubkey, u64>,
 }
 
-/// One can think of this like a bundle-level AccountLocks.
-///
-/// Ensures that BankingStage doesn't execute a transaction that mentions an account in a currently
-/// executing bundle. Bundles can span multiple transactions and we want to ensure that BankingStage
-/// can't execute a transaction that contains overlap with ANY accounts in a bundle such that BankingStage
-/// can load, execute, and commit before executing a bundle is finished.
-///
-/// It also helps pre-lock bundles ahead of time. This attempts to prevent BundleStage from being
-/// starved by a transaction being executed in BankingStage at the same time.
-///
-/// NOTE: this is currently used as a bundle locker to protect BankingStage and BundleStage race conditions.
-/// When bundle stage is multi-threaded, we'll need to make this a scheduler that supports scheduling
-/// bundles across multiple threads and self-references read and write locks when determining what to schedule.
-impl BundleAccountLocker {
+/// This class has two functions:
+/// - A bundle-level AccountsLocks that holds locks for all accounts in all transactions within a bundle.
+///   This ensures that there aren't any race conditions between BankingStage and BundleStage on read/write accounts.
+/// - A bundle sanitizer. It runs sanitization checks on Bundles and returns sanitization error.
+
+impl BundleLockerSanitizer {
     // A larger num_bundle_batches_prelock means BankingStage may get blocked waiting for bundle to
     // execute. A smaller num_bundle_batches_prelock means BundleStage may get blocked waiting for
     // AccountInUse to disappear before execution.
-    pub fn new(num_bundles_prelock: u64, tip_program_id: &Pubkey) -> BundleAccountLocker {
-        BundleAccountLocker {
-            num_bundles_prelock,
-            unlocked_bundles: VecDeque::with_capacity(100),
-            locked_bundles: VecDeque::with_capacity((num_bundles_prelock + 1) as usize),
+    pub fn new(tip_program_id: &Pubkey) -> BundleLockerSanitizer {
+        BundleLockerSanitizer {
             read_locks: HashMap::with_capacity(100),
             write_locks: HashMap::with_capacity(100),
             blacklisted_accounts: HashSet::from([
-                // right now, all transactions in a bundle are serialized up front. with tx v2,
-                // someone can change the addresses used in the lookup table at the beginning of
-                // the bundle and cause the transaction that was serialize on bundle creation to be
-                // different. to keep things simple for now, we'll prevent anyone from calling
-                // the address lookup table program to change a lookup table mid-bundle
+                // bundles are allowed to use TX V2 to load addresses from an on-chain address lookup table.
+                // They are NOT allowed to reference the on-chain lookup_table_program.
+                // This prevents someone from changing a lookup_table in a bundle, which seems like
+                // an okay tradeoff.
+                // This is because all packets in a bundle are serialized to a transaction up-front.
+                // If there's a bundle that contains packets:
+                //    [change_lookup_table_a, tx_using_lookup_table_a]
+                // then `tx_using_lookup_table_a` would serialize incorrectly
+                // since `tx_using_lookup_table_a` is being serialized using the contents of
+                // `lookup_table_a` before the transaction `change_lookup_table_a` was executed.
                 solana_address_lookup_table_program::id(),
                 // need to prevent a bundle from changing the tip_receiver unexpectedly and stealing
                 // all of the MEV profits from a validator and stakers.
                 *tip_program_id,
             ]),
         }
-    }
-
-    /// Push bundles onto unlocked bundles deque
-    pub fn push(&mut self, bundles: Vec<PacketBundle>) {
-        for bundle in bundles {
-            self.unlocked_bundles.push_back(bundle);
-        }
-    }
-
-    /// Pushes an already locked bundle to the front of locked bundles in case PoH max height reached
-    pub fn push_front(&mut self, locked_bundle: LockedBundle) {
-        self.locked_bundles.push_front(locked_bundle)
-    }
-
-    /// returns total number of bundles pending
-    pub fn num_bundles(&self) -> usize {
-        self.unlocked_bundles.len() + self.locked_bundles.len()
     }
 
     /// used in BankingStage during TransactionBatch construction to ensure that BankingStage
@@ -174,23 +145,13 @@ impl BundleAccountLocker {
         self.write_locks.keys().cloned().collect()
     }
 
-    pub fn clear(&mut self) -> Vec<Uuid> {
-        let uuids_dropped = self
-            .unlocked_bundles
-            .iter()
-            .map(|b| b.uuid)
-            .chain(self.locked_bundles.iter().map(|b| b.packet_bundle.uuid))
-            .collect();
-
-        self.unlocked_bundles.clear();
-        self.locked_bundles.clear();
+    pub fn clear(&mut self) {
         self.read_locks.clear();
         self.write_locks.clear();
-
-        uuids_dropped
     }
 
-    /// Pop bundles off unlocked bundles deque.
+    /// Pop bundles off unlocked bundles deque, performs pre-execution checks, and
+    /// returns a bundle and all the failures that occured.
     /// Ensures the locked_bundles deque is refilled.
     pub fn pop(
         &mut self,
@@ -302,16 +263,12 @@ impl BundleAccountLocker {
             .collect();
 
         if transaction_locks.len() != bundle.transactions.len() {
-            return Err(BundleSchedulerError::GetLocksError(bundle.uuid));
+            return Err(BundleSchedulerError::LockingError(bundle.uuid));
         }
 
         let bundle_read_locks = transaction_locks
             .iter()
             .flat_map(|tx| tx.readonly.iter().map(|a| **a));
-        let bundle_write_locks = transaction_locks
-            .iter()
-            .flat_map(|tx| tx.writable.iter().map(|a| **a));
-
         let bundle_read_locks =
             bundle_read_locks
                 .into_iter()
@@ -320,6 +277,9 @@ impl BundleAccountLocker {
                     map
                 });
 
+        let bundle_write_locks = transaction_locks
+            .iter()
+            .flat_map(|tx| tx.writable.iter().map(|a| **a));
         let bundle_write_locks =
             bundle_write_locks
                 .into_iter()
@@ -373,51 +333,50 @@ impl BundleAccountLocker {
         blacklisted_accounts: &HashSet<Pubkey>,
         consensus_accounts_cache: &HashSet<Pubkey>,
     ) -> Result<SanitizedBundle> {
-        if bundle.batch.is_empty() {
-            return Err(BundleSchedulerError::EmptyPackets(bundle.uuid));
-        }
-        if bundle.batch.len() > MAX_PACKETS_PER_BUNDLE {
-            return Err(BundleSchedulerError::TooManyTransactions(bundle.uuid));
-        }
-        // Not sure why a searcher would mark a packet for discard, but worth checking
-        if bundle.batch.iter().any(|p| p.meta.discard()) {
-            return Err(BundleSchedulerError::PacketMarkedAsDiscard(bundle.uuid));
+        if bank.vote_only_bank() {
+            return Err(BundleSchedulerError::VoteOnlyMode(bundle.uuid));
         }
 
-        for p in bundle.batch.iter_mut() {
-            if !verify_packet(p, false) {
-                return Err(BundleSchedulerError::FailedSigverify(bundle.uuid));
-            }
+        if bundle.batch.is_empty()
+            || bundle.batch.len() > MAX_PACKETS_PER_BUNDLE
+            || bundle.batch.iter().any(|p| p.meta.discard())
+            || bundle.batch.iter_mut().any(|p| !verify_packet(p, false))
+        {
+            return Err(BundleSchedulerError::FailedPacketBatchPreCheck(bundle.uuid));
         }
+
         let packet_indexes: Vec<usize> = (0..bundle.batch.len()).collect();
-
         let deserialized_packets = deserialize_packets(&bundle.batch, &packet_indexes);
-
         let transactions: Vec<SanitizedTransaction> = deserialized_packets
             .filter_map(|p| {
                 let immutable_packet = p.immutable_section().clone();
                 Self::transaction_from_deserialized_packet(
                     &immutable_packet,
                     &bank.feature_set,
-                    bank.vote_only_bank(),
                     bank.as_ref(),
-                    blacklisted_accounts,
-                    consensus_accounts_cache,
                 )
             })
             .collect();
 
-        if transactions.is_empty() {
-            return Err(BundleSchedulerError::NoSerializedTransactions(bundle.uuid));
+        let unique_signatures: HashSet<&Signature, RandomState> =
+            HashSet::from_iter(transactions.iter().map(|tx| tx.signature()));
+        let contains_blacklisted_account = transactions.iter().any(|tx| {
+            let accounts = tx.message.account_keys();
+            accounts.iter().any(|acc| {
+                blacklisted_accounts.contains(acc) || consensus_accounts_cache.contains(acc)
+            })
+        });
+
+        if contains_blacklisted_account {
+            return Err(BundleSchedulerError::BlacklistedAccount(bundle.uuid));
         }
-        if bundle.batch.len() != transactions.len() {
+
+        if transactions.is_empty() || bundle.batch.len() != transactions.len() {
             return Err(BundleSchedulerError::FailedToSerializeTransaction(
                 bundle.uuid,
             ));
         }
 
-        let unique_signatures: HashSet<&Signature, RandomState> =
-            HashSet::from_iter(transactions.iter().map(|tx| tx.signature()));
         if unique_signatures.len() != transactions.len() {
             return Err(BundleSchedulerError::DuplicateTransaction(bundle.uuid));
         }
@@ -449,15 +408,8 @@ impl BundleAccountLocker {
     fn transaction_from_deserialized_packet(
         deserialized_packet: &ImmutableDeserializedPacket,
         feature_set: &Arc<FeatureSet>,
-        votes_only: bool,
         address_loader: impl AddressLoader,
-        blacklisted_accounts: &HashSet<Pubkey>,
-        consensus_accounts_cache: &HashSet<Pubkey>,
     ) -> Option<SanitizedTransaction> {
-        if votes_only && !deserialized_packet.is_simple_vote() {
-            return None;
-        }
-
         let tx = SanitizedTransaction::try_new(
             deserialized_packet.transaction().clone(),
             *deserialized_packet.message_hash(),
@@ -466,19 +418,6 @@ impl BundleAccountLocker {
         )
         .ok()?;
         tx.verify_precompiles(feature_set).ok()?;
-
-        // Prevent transactions from mentioning disabled accounts that may break or DOS bundle execution
-        // stage
-        let tx_accounts = tx.message().account_keys();
-        if let Some(disabled_acc) = tx_accounts.iter().find(|acc| {
-            blacklisted_accounts.contains(acc) || consensus_accounts_cache.contains(acc)
-        }) {
-            warn!(
-                "someone attempted to touch a blacklisted account: {:?} tx: {:?}",
-                disabled_acc, tx
-            );
-            return None;
-        }
         Some(tx)
     }
 }
@@ -488,7 +427,7 @@ mod tests {
     use {
         crate::{
             bundle::PacketBundle,
-            bundle_account_locker::{BundleAccountLocker, MAX_PACKETS_PER_BUNDLE},
+            bundle_locker_sanitizer::{BundleLockerSanitizer, MAX_PACKETS_PER_BUNDLE},
             tip_manager::{TipDistributionAccountConfig, TipManager, TipManagerConfig},
         },
         solana_address_lookup_table_program::instruction::create_lookup_table,
@@ -522,7 +461,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
 
         let kp = Keypair::new();
 
@@ -578,7 +517,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
 
         let kp1 = Keypair::new();
         let kp2 = Keypair::new();
@@ -646,7 +585,7 @@ mod tests {
         } = create_genesis_config(2);
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
-        let mut bundle_account_locker = BundleAccountLocker::new(1, &Pubkey::new_unique());
+        let mut bundle_account_locker = BundleLockerSanitizer::new(1, &Pubkey::new_unique());
 
         let kp1 = Keypair::new();
         let kp2 = Keypair::new();
@@ -750,7 +689,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
 
         let kp = Keypair::new();
 
@@ -792,7 +731,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
 
         let kp = Keypair::new();
 
@@ -833,7 +772,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
 
         let kp = Keypair::new();
 
@@ -869,7 +808,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
 
         let kp = Keypair::new();
 
@@ -934,7 +873,7 @@ mod tests {
         });
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &tip_manager.tip_payment_program_id());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &tip_manager.tip_payment_program_id());
 
         let kp = Keypair::new();
         let tx =
@@ -977,7 +916,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
 
         let kp = Keypair::new();
         let tx =
@@ -1016,7 +955,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
 
         let packet_bundle = PacketBundle {
             batch: PacketBatch::new(vec![]),
@@ -1041,7 +980,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
 
         let kp = Keypair::new();
 
@@ -1077,7 +1016,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
 
         let kp = Keypair::new();
 
@@ -1113,7 +1052,7 @@ mod tests {
         let bank = Arc::new(Bank::new_no_wallclock_throttle_for_tests(&genesis_config));
 
         let mut bundle_account_locker =
-            BundleAccountLocker::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
+            BundleLockerSanitizer::new(NUM_BUNDLES_PRE_LOCK, &Pubkey::new_unique());
         let kp = Keypair::new();
 
         let mut tx = VersionedTransaction::from(transfer(
