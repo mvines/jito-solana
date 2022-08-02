@@ -103,6 +103,12 @@ while [[ -n $1 ]]; do
     elif [[ $1 == --skip-require-tower ]]; then
       maybeRequireTower=false
       shift
+    elif [[ $1 == --trust-relayer-packets ]]; then
+      args+=("$1")
+      shift
+    elif [[ $1 == --trust-block-engine-packets ]]; then
+      args+=("$1")
+      shift
     elif [[ $1 == --relayer-address ]]; then
       args+=("$1" "$2")
       shift 2
@@ -121,15 +127,14 @@ while [[ -n $1 ]]; do
     elif [[ $1 == --shred-receiver-address ]]; then
       args+=("$1" "$2")
       shift 2
+    elif [[ $1 = --log-messages-bytes-limit ]]; then
+      args+=("$1" "$2")
+      shift 2
     else
       echo "Unknown argument: $1"
       $program --help
       exit 1
     fi
-  else
-    echo "Unknown argument: $1"
-    $program --help
-    exit 1
   fi
 done
 
