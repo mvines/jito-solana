@@ -149,6 +149,7 @@ impl BundleLockerSanitizer {
         self.write_locks.clear();
     }
 
+    /// NOTE: this needs to be called
     pub fn refresh_locked_bundle(
         &mut self,
         locked_bundle: LockedBundle,
