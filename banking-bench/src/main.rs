@@ -174,8 +174,6 @@ impl PacketsPerIteration {
 fn main() {
     solana_logger::setup();
 
-    const NUM_BUNDLES_PRE_LOCK: u64 = 4;
-
     let matches = Command::new(crate_name!())
         .about(crate_description!())
         .version(solana_version::version!())
@@ -355,7 +353,6 @@ fn main() {
         let tpu_use_quic = matches.is_present("tpu_use_quic");
 
         let bundle_account_locker = Arc::new(Mutex::new(BundleLockerSanitizer::new(
-            NUM_BUNDLES_PRE_LOCK,
             &Pubkey::new_unique(),
         )));
 

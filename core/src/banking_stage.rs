@@ -403,7 +403,6 @@ impl BankingStage {
         bank_forks: Arc<RwLock<BankForks>>,
         tip_accounts: HashSet<Pubkey>,
         bundle_account_locker: Arc<Mutex<BundleLockerSanitizer>>,
-        bank_forks: Arc<RwLock<BankForks>>,
     ) -> Self {
         Self::new_num_threads(
             cluster_info,
@@ -439,7 +438,6 @@ impl BankingStage {
         bank_forks: Arc<RwLock<BankForks>>,
         tip_accounts: HashSet<Pubkey>,
         bundle_account_locker: Arc<Mutex<BundleLockerSanitizer>>,
-        bank_forks: Arc<RwLock<BankForks>>,
     ) -> Self {
         assert!(num_threads >= MIN_TOTAL_THREADS);
         // Single thread to generate entries from many banks.
@@ -893,7 +891,6 @@ log_messages_bytes_limit,
         bank_forks: &Arc<RwLock<BankForks>>,
         tip_accounts: &HashSet<Pubkey>,
         bundle_account_locker: &Arc<Mutex<BundleLockerSanitizer>>,
-        bank_forks: &Arc<RwLock<BankForks>>,
     ) {
         let ((metrics_action, decision), make_decision_time) = measure!(
             {
@@ -1117,7 +1114,6 @@ log_messages_bytes_limit,
         bank_forks: &Arc<RwLock<BankForks>>,
         tip_accounts: HashSet<Pubkey>,
         bundle_account_locker: Arc<Mutex<BundleLockerSanitizer>>,
-        bank_forks: &Arc<RwLock<BankForks>>,
     ) {
         let recorder = poh_recorder.read().unwrap().recorder();
         let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
@@ -1511,7 +1507,7 @@ log_messages_bytes_limit,
         gossip_vote_sender: &ReplayVoteSender,
         qos_service: &QosService,
         log_messages_bytes_limit: Option<usize>,
-        bundle_account_locker: &Arc<Mutex<BundleAccountLocker>>,
+        bundle_account_locker: &Arc<Mutex<BundleLockerSanitizer>>,
     ) -> ProcessTransactionBatchOutput {
         let mut cost_model_time = Measure::start("cost_model");
 
@@ -1714,7 +1710,7 @@ log_messages_bytes_limit,
         gossip_vote_sender: &ReplayVoteSender,
         qos_service: &QosService,
         log_messages_bytes_limit: Option<usize>,
-        bundle_account_locker: &Arc<Mutex<BundleAccountLocker>>,
+        bundle_account_locker: &Arc<Mutex<BundleLockerSanitizer>>,
     ) -> ProcessTransactionsSummary {
         let mut chunk_start = 0;
         let mut all_retryable_tx_indexes = vec![];
