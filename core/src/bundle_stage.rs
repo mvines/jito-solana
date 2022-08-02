@@ -889,7 +889,7 @@ impl BundleStage {
                 bundle_account_locker
                     .lock()
                     .unwrap()
-                    .unlock_bundle_accounts(locked_bundle);
+                    .unlock_bundle_accounts(&locked_bundle);
 
                 match result {
                     Ok(_) => {}
@@ -1175,11 +1175,11 @@ mod tests {
         let recorder = poh_recorder.read().unwrap().recorder();
         let cost_model = Arc::new(RwLock::new(CostModel::default()));
         let qos_service = QosService::new(cost_model, 0);
-        let mut bundle_account_locker = BundleLockerSanitizer::new(&Pubkey::new_unique());
+        let mut bundle_locker = BundleLockerSanitizer::new(&Pubkey::new_unique());
         let mut execute_and_commit_timings = LeaderExecuteAndCommitTimings::default();
         let bank_start = poh_recorder.read().unwrap().bank_start().unwrap();
-        bundle_account_locker.push(bundle.clone());
-        let locked_bundle = bundle_account_locker
+        bundle_locker.push(bundle.clone());
+        let locked_bundle = bundle_locker
             .get_locked_bundle(&bank, &HashSet::default())
             .unwrap();
 
@@ -1205,8 +1205,8 @@ mod tests {
                 .any(|option| matches!(option, AssertDuplicateInBundleDropped))
         {
             assert_eq!(results, Ok(()));
-            bundle_account_locker.push(bundle);
-            assert!(bundle_account_locker
+            bundle_locker.push(bundle);
+            assert!(bundle_locker
                 .get_locked_bundle(&bank, &HashSet::default())
                 .is_none());
         }

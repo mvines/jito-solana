@@ -164,7 +164,7 @@ impl BundleLockerSanitizer {
     /// unlocks any pre-locked accounts in this bundle
     /// the caller is responsible for ensuring the LockedBundle passed in here was returned from
     /// BundleScheduler::pop as an already-scheduled bundle.
-    pub fn unlock_bundle_accounts(&mut self, locked_bundle: LockedBundle) {
+    pub fn unlock_bundle_accounts(&mut self, locked_bundle: &LockedBundle) {
         for (acc, count) in locked_bundle.read_locks() {
             if let Entry::Occupied(mut entry) = self.read_locks.entry(*acc) {
                 let val = entry.get_mut();
