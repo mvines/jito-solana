@@ -422,11 +422,8 @@ mod tests {
             uuid: Uuid::new_v4(),
         };
 
-        bundle_account_locker.push(vec![packet_bundle]);
-        assert_eq!(bundle_account_locker.num_bundles(), 1);
-
         let locked_bundle = bundle_account_locker
-            .get_locked_bundle(&bank, &HashSet::default())
+            .get_locked_bundle(packet_bundle, &bank, &HashSet::default())
             .unwrap();
         assert_eq!(locked_bundle.sanitized_bundle.transactions.len(), 1);
         assert_eq!(
@@ -434,7 +431,6 @@ mod tests {
             &tx.signatures[0]
         );
 
-        assert_eq!(bundle_account_locker.num_bundles(), 0);
         assert_eq!(
             bundle_account_locker.read_locks(),
             HashSet::from([system_program::id()])
@@ -444,7 +440,7 @@ mod tests {
             HashSet::from([mint_keypair.pubkey(), kp.pubkey()])
         );
 
-        bundle_account_locker.unlock_bundle_accounts(locked_bundle);
+        bundle_account_locker.unlock_bundle_accounts(&locked_bundle);
         assert_eq!(bundle_account_locker.num_bundles(), 0);
         assert!(bundle_account_locker.read_locks().is_empty());
         assert!(bundle_account_locker.write_locks().is_empty());
@@ -486,11 +482,8 @@ mod tests {
             uuid: Uuid::new_v4(),
         };
 
-        bundle_account_locker.push(vec![packet_bundle]);
-        assert_eq!(bundle_account_locker.num_bundles(), 1);
-
         let locked_bundle = bundle_account_locker
-            .get_locked_bundle(&bank, &HashSet::default())
+            .get_locked_bundle(packet_bundle, &bank, &HashSet::default())
             .unwrap();
         assert_eq!(locked_bundle.sanitized_bundle.transactions.len(), 2);
         assert_eq!(
@@ -502,7 +495,6 @@ mod tests {
             &tx2.signatures[0]
         );
 
-        assert_eq!(bundle_account_locker.num_bundles(), 0);
         assert_eq!(
             bundle_account_locker.read_locks(),
             HashSet::from([system_program::id()])
@@ -512,7 +504,7 @@ mod tests {
             HashSet::from([mint_keypair.pubkey(), kp1.pubkey(), kp2.pubkey()])
         );
 
-        bundle_account_locker.unlock_bundle_accounts(locked_bundle);
+        bundle_account_locker.unlock_bundle_accounts(&locked_bundle);
         assert_eq!(bundle_account_locker.num_bundles(), 0);
         assert!(bundle_account_locker.read_locks().is_empty());
         assert!(bundle_account_locker.write_locks().is_empty());
@@ -559,19 +551,18 @@ mod tests {
             uuid: Uuid::new_v4(),
         };
 
-        bundle_account_locker.push(vec![packet_bundle_1, packet_bundle_2]);
-        assert_eq!(bundle_account_locker.num_bundles(), 2);
-
-        let locked_bundle = bundle_account_locker
-            .get_locked_bundle(&bank, &HashSet::default())
+        let locked_bundle_1 = bundle_account_locker
+            .get_locked_bundle(packet_bundle_1, &bank, &HashSet::default())
             .unwrap();
-        assert_eq!(locked_bundle.sanitized_bundle.transactions.len(), 1);
+        let locked_bundle_2 = bundle_account_locker
+            .get_locked_bundle(packet_bundle_2, &bank, &HashSet::default())
+            .unwrap();
+        assert_eq!(locked_bundle_1.sanitized_bundle.transactions.len(), 1);
         assert_eq!(
-            locked_bundle.sanitized_bundle.transactions[0].signature(),
+            locked_bundle_1.sanitized_bundle.transactions[0].signature(),
             &tx1.signatures[0]
         );
 
-        assert_eq!(bundle_account_locker.num_bundles(), 1);
         assert_eq!(
             bundle_account_locker.read_locks(),
             HashSet::from([system_program::id()])
@@ -582,8 +573,7 @@ mod tests {
             HashSet::from([mint_keypair.pubkey(), kp1.pubkey(), kp2.pubkey()])
         );
 
-        bundle_account_locker.unlock_bundle_accounts(locked_bundle);
-        assert_eq!(bundle_account_locker.num_bundles(), 1);
+        bundle_account_locker.unlock_bundle_accounts(&locked_bundle_1);
 
         // packet_bundle_1 is unlocked, so the lock should just contain contents for packet_bundle_2
         assert_eq!(
@@ -595,13 +585,9 @@ mod tests {
             HashSet::from([mint_keypair.pubkey(), kp2.pubkey()])
         );
 
-        // this shall be packet_bundle_2
-        let locked_bundle = bundle_account_locker
-            .get_locked_bundle(&bank, &HashSet::default())
-            .unwrap();
-        assert_eq!(locked_bundle.sanitized_bundle.transactions.len(), 1);
+        assert_eq!(locked_bundle_2.sanitized_bundle.transactions.len(), 1);
         assert_eq!(
-            locked_bundle.sanitized_bundle.transactions[0].signature(),
+            locked_bundle_2.sanitized_bundle.transactions[0].signature(),
             &tx2.signatures[0]
         );
 
@@ -615,7 +601,7 @@ mod tests {
             HashSet::from([mint_keypair.pubkey(), kp2.pubkey()])
         );
 
-        bundle_account_locker.unlock_bundle_accounts(locked_bundle);
+        bundle_account_locker.unlock_bundle_accounts(locked_bundle_2);
         assert_eq!(bundle_account_locker.num_bundles(), 0);
         assert!(bundle_account_locker.read_locks().is_empty());
         assert!(bundle_account_locker.write_locks().is_empty());
