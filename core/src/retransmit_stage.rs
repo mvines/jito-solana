@@ -316,7 +316,6 @@ fn retransmit_shred(
         .into_iter()
         .filter(|addr| ContactInfo::is_valid_address(addr, socket_addr_space) || (shred_receiver_addr.is_some() && shred_receiver_addr.unwrap() == *addr))
         .collect();
-    info!("[bill-debug] peers: {:?}", addrs);
     compute_turbine_peers.stop();
     stats
         .compute_turbine_peers_total
