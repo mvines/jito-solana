@@ -140,7 +140,8 @@ pub struct TreeNode {
 
 impl TreeNode {
     fn vec_from_stake_meta(stake_meta: &StakeMeta) -> Result<Option<Vec<TreeNode>>, Error> {
-        info!("building tree from stake_meta: {:?}", stake_meta.maybe_tip_distribution_meta.unwrap());
+        let x = stake_meta.clone();
+        info!("building tree from stake_meta: {:?}", x.maybe_tip_distribution_meta.unwrap());
         let validator_vote_account = stake_meta
             .validator_vote_account
             .parse()
