@@ -74,7 +74,7 @@ fn main() {
     let tx = Transaction::new_signed_with_payer(
         &[ix],
         Some(&fee_payer_pubkey),
-        &[&fee_payer_kp],
+        &[&validator_vote_account, &fee_payer_kp],
         recent_blockhash,
     );
     execute_transactions(Arc::new(rpc_client), vec![tx]);
