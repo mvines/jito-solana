@@ -16,7 +16,11 @@ use solana_tip_distributor::merkle_root_generator_workflow::execute_transactions
 struct Args {
     /// TODO
     #[clap(long, env)]
-    signer: PathBuf,
+    fee_payer: PathBuf,
+
+    /// TODO
+    #[clap(long, env)]
+    validator_vote_account: PathBuf,
 
     /// TODO
     #[clap(long, env)]
@@ -44,9 +48,12 @@ fn main() {
     let new_authority = Pubkey::from_str(&*args.new_authority).unwrap();
     let tip_distribution_account = Pubkey::from_str(&*args.tip_distribution_account).unwrap();
 
-    let signer =
-        read_keypair_file(&args.signer).expect("Failed to read signer keypair file.");
-    let signer_pubkey = signer.pubkey();
+    let validator_vote_account =
+        read_keypair_file(&args.validator_vote_account).expect("Failed to read validator vote keypair file.");
+    let validator_vote_account_pubkey = validator_vote_account.pubkey();
+    let fee_payer_kp =
+        read_keypair_file(&args.fee_payer).expect("Failed to read fee payer keypair file.");
+    let fee_payer_pubkey = fee_payer_kp.pubkey();
 
     let rpc_client = RpcClient::new(args.rpc_url);
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
@@ -60,14 +67,14 @@ fn main() {
         },
         SetMerkleRootUploadAuthorityAccounts {
             tip_distribution_account,
-            signer: signer_pubkey,
+            signer: validator_vote_account_pubkey,
         },
     );
 
     let tx = Transaction::new_signed_with_payer(
         &[ix],
-        Some(&signer_pubkey),
-        &[&signer],
+        Some(&fee_payer_pubkey),
+        &[&fee_payer_kp],
         recent_blockhash,
     );
     execute_transactions(Arc::new(rpc_client), vec![tx]);
