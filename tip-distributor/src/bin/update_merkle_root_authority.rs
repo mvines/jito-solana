@@ -49,7 +49,7 @@ fn main() {
     let signer_pubkey = signer.pubkey();
 
     let rpc_client = RpcClient::new(args.rpc_url);
-    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     let recent_blockhash = runtime.block_on(rpc_client.get_latest_blockhash()).unwrap();
 
     // Create instruction.
