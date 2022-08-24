@@ -1837,6 +1837,14 @@ pub fn main() {
                 .help("Address of the block engine's authentication service.")
         )
         .arg(
+            Arg::with_name("block_engine_tpu_delay_ms")
+                .long("block-engine-tpu-delay-ms")
+                .value_name("block_engine_tpu_delay_ms")
+                .takes_value(true)
+                .conflicts_with("relayer_address")
+                .help("Delay expressed in milliseconds added to packets in the normal TPU pipeline to give the block-engine some time to finish up state auctions. This is only used when not connected to a Relayer.")
+        )
+        .arg(
             Arg::with_name("relayer_auth_service_address")
                 .long("relayer-auth-service-address")
                 .value_name("relayer_auth_service_address")
@@ -2727,28 +2735,6 @@ pub fn main() {
     let voting_disabled = matches.is_present("no_voting") || restricted_repair_only_mode;
     let tip_manager_config = tip_manager_config_from_matches(&matches, voting_disabled);
 
-    let is_block_engine_enabled = matches.is_present("block_engine_address")
-        || matches.is_present("block_engine_auth_service_address")
-        || matches.is_present("trust_block_engine_packets");
-    let maybe_block_engine_config = is_block_engine_enabled.then(|| {
-        let addr: String = value_of(&matches, "block_engine_auth_service_address")
-            .expect("missing block-engine-auth-service-address");
-        let auth_service_endpoint =
-            Endpoint::from_shared(addr).expect("invalid block-engine-auth-service-address value");
-
-        let addr: String =
-            value_of(&matches, "block_engine_address").expect("missing block-engine-address");
-        let backend_endpoint = Endpoint::from_shared(addr)
-            .expect("invalid block-engine-address value")
-            .tcp_keepalive(Some(Duration::from_secs(60)));
-
-        BlockEngineConfig {
-            auth_service_endpoint,
-            backend_endpoint,
-            trust_packets: matches.is_present("trust_block_engine_packets"),
-        }
-    });
-
     let is_relayer_enabled = matches.is_present("relayer_auth_service_address")
         || matches.is_present("relayer_address")
         || matches.is_present("trust_relayer_packets")
@@ -2784,6 +2770,40 @@ pub fn main() {
             trust_packets: matches.is_present("trust_relayer_packets"),
         }
     });
+
+    let is_block_engine_enabled = matches.is_present("block_engine_address")
+        || matches.is_present("block_engine_auth_service_address")
+        || matches.is_present("block_engine_tpu_delay_ms")
+        || matches.is_present("trust_block_engine_packets");
+    let (maybe_block_engine_config, maybe_block_engine_tpu_delay) =
+        is_block_engine_enabled.then(|| {
+            let addr: String = value_of(&matches, "block_engine_auth_service_address")
+                .expect("missing block-engine-auth-service-address");
+            let auth_service_endpoint = Endpoint::from_shared(addr)
+                .expect("invalid block-engine-auth-service-address value");
+
+            let addr: String =
+                value_of(&matches, "block_engine_address").expect("missing block-engine-address");
+            let backend_endpoint = Endpoint::from_shared(addr)
+                .expect("invalid block-engine-address value")
+                .tcp_keepalive(Some(Duration::from_secs(60)));
+
+            let maybe_block_engine_tpu_delay = if !relayer_is_enabled {
+                let delay_ms: u64 = value_of(&matches, "block_engine_tpu_delay_ms").unwrap_or(200);
+                Some(Duration::from_millis(delay_ms))
+            } else {
+                None
+            };
+
+            (
+                BlockEngineConfig {
+                    auth_service_endpoint,
+                    backend_endpoint,
+                    trust_packets: matches.is_present("trust_block_engine_packets"),
+                },
+                maybe_block_engine_tpu_delay,
+            )
+        });
 
     let mut validator_config = ValidatorConfig {
         require_tower: matches.is_present("require_tower"),
@@ -2919,6 +2939,7 @@ pub fn main() {
         },
         maybe_relayer_config,
         maybe_block_engine_config,
+        maybe_block_engine_tpu_delay,
         tip_manager_config,
         shred_receiver_address: matches
             .value_of("shred_receiver_address")

@@ -23,6 +23,7 @@ use {
         staked_nodes_updater_service::StakedNodesUpdaterService,
         tip_manager::{TipManager, TipManagerConfig},
     },
+    chrono::Duration,
     crossbeam_channel::{unbounded, Receiver},
     solana_client::connection_cache::ConnectionCache,
     solana_gossip::cluster_info::ClusterInfo,
@@ -111,6 +112,7 @@ impl Tpu {
         log_messages_bytes_limit: Option<usize>,
         staked_nodes: &Arc<RwLock<StakedNodes>>,
         maybe_block_engine_config: Option<BlockEngineConfig>,
+        maybe_block_engine_tpu_delay: Option<Duration>,
         maybe_relayer_config: Option<RelayerConfig>,
         tip_manager_config: TipManagerConfig,
         shred_receiver_address: Option<SocketAddr>,
@@ -293,6 +295,7 @@ impl Tpu {
             bank_forks.clone(),
             blacklisted_accounts,
             bundle_account_locker.clone(),
+            maybe_block_engine_tpu_delay,
         );
 
         let bundle_stage = BundleStage::new(

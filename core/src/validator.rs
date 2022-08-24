@@ -179,6 +179,7 @@ pub struct ValidatorConfig {
     pub runtime_config: RuntimeConfig,
     pub maybe_relayer_config: Option<RelayerConfig>,
     pub maybe_block_engine_config: Option<BlockEngineConfig>,
+    pub maybe_block_engine_tpu_delay: Option<Duration>,
     pub shred_receiver_address: Option<SocketAddr>,
     pub tip_manager_config: TipManagerConfig,
 }

@@ -405,6 +405,7 @@ impl BankingStage {
         bank_forks: Arc<RwLock<BankForks>>,
         blacklisted_accounts: HashSet<Pubkey>,
         bundle_account_locker: BundleAccountLocker,
+        delay: Option<Duration>,
     ) -> Self {
         Self::new_num_threads(
             cluster_info,
