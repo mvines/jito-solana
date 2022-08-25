@@ -21,7 +21,9 @@ use {
     },
     solana_core::{
         ledger_cleanup_service::{DEFAULT_MAX_LEDGER_SHREDS, DEFAULT_MIN_MAX_LEDGER_SHREDS},
+        proxy::{block_engine_stage::BlockEngineConfig, relayer_stage::RelayerConfig},
         system_monitor_service::SystemMonitorService,
+        tip_manager::{TipDistributionAccountConfig, TipManagerConfig},
         tower_storage,
         tpu::DEFAULT_TPU_COALESCE_MS,
         validator::{is_snapshot_config_valid, Validator, ValidatorConfig, ValidatorStartProgress},
@@ -89,7 +91,7 @@ use {
         path::{Path, PathBuf},
         process::exit,
         str::FromStr,
-        sync::{Arc, RwLock},
+        sync::{Arc, Mutex, RwLock},
         time::{Duration, SystemTime},
     },
 };
@@ -111,6 +113,9 @@ const DEFAULT_MIN_SNAPSHOT_DOWNLOAD_SPEED: u64 = 10485760;
 // The maximum times of snapshot download abort and retry
 const MAX_SNAPSHOT_DOWNLOAD_ABORT: u32 = 5;
 const MILLIS_PER_SECOND: u64 = 1000;
+const DEFAULT_PREALLOCATED_BUNDLE_COST: u64 = 3000000;
+const DEFAULT_RELAYER_EXPECTED_HEARTBEAT_INTERVAL_MS: &str = "500";
+const DEFAULT_RELAYER_MAX_FAILED_HEARTBEATS: &str = "3";
 
 fn monitor_validator(ledger_path: &Path) {
     let dashboard = Dashboard::new(ledger_path, None, None).unwrap_or_else(|err| {
@@ -505,6 +510,7 @@ pub fn main() {
     let default_accounts_shrink_ratio = &DEFAULT_ACCOUNTS_SHRINK_RATIO.to_string();
     let default_tpu_connection_pool_size = &DEFAULT_TPU_CONNECTION_POOL_SIZE.to_string();
     let default_rpc_max_request_body_size = &MAX_REQUEST_BODY_SIZE.to_string();
+    let default_preallocated_bundle_cost = &DEFAULT_PREALLOCATED_BUNDLE_COST.to_string();
 
     let matches = App::new(crate_name!()).about(crate_description!())
         .version(solana_version::version!())
@@ -1779,6 +1785,87 @@ pub fn main() {
                 .hidden(true),
         )
         .arg(
+            Arg::with_name("block_engine_url")
+                .long("block-engine-url")
+                .help("Block engine url.  Set to empty string to disable block engine connection.")
+                .takes_value(true)
+        )
+        .arg(
+            Arg::with_name("relayer_url")
+                .long("relayer-url")
+                .help("Relayer url. Set to empty string to disable relayer connection.")
+                .takes_value(true)
+        )
+        .arg(
+            Arg::with_name("trust_relayer_packets")
+                .long("trust-relayer-packets")
+                .takes_value(false)
+                .help("Skip signature verification on relayer packets. Not recommended unless the relayer is trusted.")
+        )
+        .arg(
+            Arg::with_name("relayer_expected_heartbeat_interval_ms")
+                .long("relayer-expected-heartbeat-interval-ms")
+                .takes_value(true)
+                .help("Interval at which the Relayer is expected to send heartbeat messages.")
+                .default_value(DEFAULT_RELAYER_EXPECTED_HEARTBEAT_INTERVAL_MS)
+        )
+        .arg(
+            Arg::with_name("relayer_max_failed_heartbeats")
+                .long("relayer-max-failed-heartbeats")
+                .takes_value(true)
+                .help("Maximum number of heartbeats the Relayer can miss before falling back to the normal TPU pipeline.")
+                .default_value(DEFAULT_RELAYER_MAX_FAILED_HEARTBEATS)
+        )
+        .arg(
+            Arg::with_name("trust_block_engine_packets")
+                .long("trust-block-engine-packets")
+                .takes_value(false)
+                .help("Skip signature verification on block engine packets. Not recommended unless the block engine is trusted.")
+        )
+        .arg(
+            Arg::with_name("tip_payment_program_pubkey")
+                .long("tip-payment-program-pubkey")
+                .value_name("TIP_PAYMENT_PROGRAM_PUBKEY")
+                .takes_value(true)
+                .help("The public key of the tip-payment program")
+        )
+        .arg(
+            Arg::with_name("tip_distribution_program_pubkey")
+                .long("tip-distribution-program-pubkey")
+                .value_name("TIP_DISTRIBUTION_PROGRAM_PUBKEY")
+                .takes_value(true)
+                .help("The public key of the tip-distribution program.")
+        )
+        .arg(
+            Arg::with_name("merkle_root_upload_authority")
+                .long("merkle-root-upload-authority")
+                .value_name("MERKLE_ROOT_UPLOAD_AUTHORITY")
+                .takes_value(true)
+                .help("The public key of the authorized merkle-root uploader.")
+        )
+        .arg(
+            Arg::with_name("commission_bps")
+                .long("commission-bps")
+                .value_name("COMMISSION_BPS")
+                .takes_value(true)
+                .help("The commission validator takes from tips expressed in basis points.")
+        )
+        .arg(
+            Arg::with_name("preallocated_bundle_cost")
+                .long("preallocated-bundle-cost")
+                .value_name("PREALLOCATED_BUNDLE_COST")
+                .takes_value(true)
+                .default_value(default_preallocated_bundle_cost)
+                .help("Number of CUs to allocate for bundles at beginning of slot.")
+        )
+        .arg(
+            Arg::with_name("shred_receiver_address")
+                .long("shred-receiver-address")
+                .value_name("SHRED_RECEIVER_ADDRESS")
+                .takes_value(true)
+                .help("Validator will forward all shreds to this address in addition to normal turbine operation. Set to empty string to disable.")
+        )
+        .arg(
             Arg::with_name("log_messages_bytes_limit")
                 .long("log-messages-bytes-limit")
                 .takes_value(true)
@@ -1887,6 +1974,23 @@ pub fn main() {
             .about("Run the validator")
         )
         .subcommand(
+            SubCommand::with_name("set-block-engine-config")
+                .about("Set configuration for connection to a block engine")
+                .arg(
+                    Arg::with_name("block_engine_url")
+                        .long("block-engine-url")
+                        .help("Block engine url.  Set to empty string to disable block engine connection.")
+                        .takes_value(true)
+                        .required(true)
+                )
+                .arg(
+                    Arg::with_name("trust_block_engine_packets")
+                        .long("trust-block-engine-packets")
+                        .takes_value(false)
+                        .help("Skip signature verification on block engine packets. Not recommended unless the block engine is trusted.")
+                )
+        )
+        .subcommand(
             SubCommand::with_name("set-identity")
             .about("Set the validator identity")
             .arg(
@@ -1918,6 +2022,51 @@ pub fn main() {
                     .help("New filter using the same format as the RUST_LOG environment variable")
             )
             .after_help("Note: the new filter only applies to the currently running validator instance")
+        )
+        .subcommand(
+            SubCommand::with_name("set-relayer-config")
+                .about("Set configuration for connection to a relayer")
+                .arg(
+                    Arg::with_name("relayer_url")
+                        .long("relayer-url")
+                        .help("Relayer url. Set to empty string to disable relayer connection.")
+                        .takes_value(true)
+                        .required(true)
+                )
+                .arg(
+                    Arg::with_name("trust_relayer_packets")
+                        .long("trust-relayer-packets")
+                        .takes_value(false)
+                        .help("Skip signature verification on relayer packets. Not recommended unless the relayer is trusted.")
+                )
+                .arg(
+                    Arg::with_name("relayer_expected_heartbeat_interval_ms")
+                        .long("relayer-expected-heartbeat-interval-ms")
+                        .takes_value(true)
+                        .help("Interval at which the Relayer is expected to send heartbeat messages.")
+                        .required(false)
+                        .default_value(DEFAULT_RELAYER_EXPECTED_HEARTBEAT_INTERVAL_MS)
+                )
+                .arg(
+                    Arg::with_name("relayer_max_failed_heartbeats")
+                        .long("relayer-max-failed-heartbeats")
+                        .takes_value(true)
+                        .help("Maximum number of heartbeats the Relayer can miss before falling back to the normal TPU pipeline.")
+                        .required(false)
+                        .default_value(DEFAULT_RELAYER_MAX_FAILED_HEARTBEATS)
+                )
+        )
+        .subcommand(
+            SubCommand::with_name("set-shred-receiver-address")
+                .about("Changes shred receiver address")
+                .arg(
+                    Arg::with_name("shred_receiver_address")
+                        .long("shred-receiver-address")
+                        .value_name("SHRED_RECEIVER_ADDRESS")
+                        .takes_value(true)
+                        .help("Validator will forward all shreds to this address in addition to normal turbine operation. Set to empty string to disable.")
+                        .required(true)
+                )
         )
         .subcommand(
             SubCommand::with_name("staked-nodes-overrides")
@@ -2141,6 +2290,23 @@ pub fn main() {
                 });
             return;
         }
+        ("set-block-engine-config", Some(subcommand_matches)) => {
+            let block_engine_url = value_t_or_exit!(subcommand_matches, "block_engine_url", String);
+            let trust_packets = subcommand_matches.is_present("trust_block_engine_packets");
+            let admin_client = admin_rpc_service::connect(&ledger_path);
+            admin_rpc_service::runtime()
+                .block_on(async move {
+                    admin_client
+                        .await?
+                        .set_block_engine_config(block_engine_url, trust_packets)
+                        .await
+                })
+                .unwrap_or_else(|err| {
+                    println!("set block engine config failed: {}", err);
+                    exit(1);
+                });
+            return;
+        }
         ("set-identity", Some(subcommand_matches)) => {
             let require_tower = subcommand_matches.is_present("require_tower");
 
@@ -2200,6 +2366,43 @@ pub fn main() {
                 .block_on(async move { admin_client.await?.set_log_filter(filter).await })
                 .unwrap_or_else(|err| {
                     println!("set log filter failed: {}", err);
+                    exit(1);
+                });
+            return;
+        }
+        ("set-relayer-config", Some(subcommand_matches)) => {
+            let relayer_url = value_t_or_exit!(subcommand_matches, "relayer_url", String);
+            let trust_packets = subcommand_matches.is_present("trust_relayer_packets");
+            let expected_heartbeat_interval_ms: u64 =
+                value_of(subcommand_matches, "relayer_expected_heartbeat_interval_ms").unwrap();
+            let max_failed_heartbeats: u64 =
+                value_of(subcommand_matches, "relayer_max_failed_heartbeats").unwrap();
+            let admin_client = admin_rpc_service::connect(&ledger_path);
+            admin_rpc_service::runtime()
+                .block_on(async move {
+                    admin_client
+                        .await?
+                        .set_relayer_config(
+                            relayer_url,
+                            trust_packets,
+                            expected_heartbeat_interval_ms,
+                            max_failed_heartbeats,
+                        )
+                        .await
+                })
+                .unwrap_or_else(|err| {
+                    println!("set relayer config failed: {}", err);
+                    exit(1);
+                });
+            return;
+        }
+        ("set-shred-receiver-address", Some(subcommand_matches)) => {
+            let addr = value_t_or_exit!(subcommand_matches, "shred_receiver_address", String);
+            let admin_client = admin_rpc_service::connect(&ledger_path);
+            admin_rpc_service::runtime()
+                .block_on(async move { admin_client.await?.set_shred_receiver_address(addr).await })
+                .unwrap_or_else(|err| {
+                    println!("set shred receiver address failed: {}", err);
                     exit(1);
                 });
             return;
@@ -2579,6 +2782,44 @@ pub fn main() {
     }
     let full_api = matches.is_present("full_rpc_api");
 
+    let voting_disabled = matches.is_present("no_voting") || restricted_repair_only_mode;
+    let tip_manager_config = tip_manager_config_from_matches(&matches, voting_disabled);
+
+    let block_engine_config = BlockEngineConfig {
+        block_engine_url: if matches.is_present("block_engine_url") {
+            value_of(&matches, "block_engine_url").expect("couldn't parse block_engine_url")
+        } else {
+            "".to_string()
+        },
+        trust_packets: matches.is_present("trust_block_engine_packets"),
+    };
+
+    // Defaults are set in cli definition, safe to use unwrap() here
+    let expected_heartbeat_interval_ms: u64 =
+        value_of(&matches, "relayer_expected_heartbeat_interval_ms").unwrap();
+    assert!(
+        expected_heartbeat_interval_ms > 0,
+        "relayer-max-failed-heartbeats must be greater than zero"
+    );
+    let max_failed_heartbeats: u64 = value_of(&matches, "relayer_max_failed_heartbeats").unwrap();
+    assert!(
+        max_failed_heartbeats > 0,
+        "relayer-max-failed-heartbeats must be greater than zero"
+    );
+
+    let relayer_config = RelayerConfig {
+        relayer_url: if matches.is_present("relayer_url") {
+            value_of(&matches, "relayer_url").expect("couldn't parse relayer_url")
+        } else {
+            "".to_string()
+        },
+        expected_heartbeat_interval: Duration::from_millis(expected_heartbeat_interval_ms),
+        oldest_allowed_heartbeat: Duration::from_millis(
+            max_failed_heartbeats * expected_heartbeat_interval_ms,
+        ),
+        trust_packets: matches.is_present("trust_relayer_packets"),
+    };
+
     let mut validator_config = ValidatorConfig {
         require_tower: matches.is_present("require_tower"),
         tower_storage,
@@ -2712,8 +2953,18 @@ pub fn main() {
             log_messages_bytes_limit: value_of(&matches, "log_messages_bytes_limit"),
             ..RuntimeConfig::default()
         },
+        relayer_config: Arc::new(Mutex::new(relayer_config)),
+        block_engine_config: Arc::new(Mutex::new(block_engine_config)),
+        tip_manager_config,
+        shred_receiver_address: Arc::new(RwLock::new(
+            matches
+                .value_of("shred_receiver_address")
+                .map(|addr| SocketAddr::from_str(addr).expect("shred_receiver_address invalid")),
+        )),
         staked_nodes_overrides: staked_nodes_overrides.clone(),
         replay_slots_concurrently: matches.is_present("replay_slots_concurrently"),
+        preallocated_bundle_cost: value_of(&matches, "preallocated_bundle_cost")
+            .unwrap_or(DEFAULT_PREALLOCATED_BUNDLE_COST),
         ..ValidatorConfig::default()
     };
 
@@ -3158,6 +3409,9 @@ pub fn main() {
             bank_forks: validator.bank_forks.clone(),
             cluster_info: validator.cluster_info.clone(),
             vote_account,
+            relayer_config: validator_config.relayer_config,
+            block_engine_config: validator_config.block_engine_config,
+            shred_receiver_address: validator_config.shred_receiver_address,
         });
 
     if let Some(filename) = init_complete_file {
@@ -3339,5 +3593,49 @@ fn warn_for_deprecated_arguments(matches: &ArgMatches) {
                 format!("--{} is deprecated. {}", arg, help).replace('_', "-")
             );
         }
+    }
+}
+
+fn tip_manager_config_from_matches(
+    matches: &ArgMatches,
+    voting_disabled: bool,
+) -> TipManagerConfig {
+    TipManagerConfig {
+        tip_payment_program_id: pubkey_of(matches, "tip_payment_program_pubkey").unwrap_or_else(
+            || {
+                if !voting_disabled {
+                    panic!("--tip-payment-program-pubkey argument required when validator is voting");
+                }
+                Pubkey::new_unique()
+            },
+        ),
+        tip_distribution_program_id: pubkey_of(matches, "tip_distribution_program_pubkey")
+            .unwrap_or_else(|| {
+                if !voting_disabled {
+                    panic!("--tip-distribution-program-pubkey argument required when validator is voting");
+                }
+                Pubkey::new_unique()
+            }),
+        tip_distribution_account_config: TipDistributionAccountConfig {
+            merkle_root_upload_authority: pubkey_of(matches, "merkle_root_upload_authority")
+                .unwrap_or_else(|| {
+                    if !voting_disabled {
+                        panic!("--merkle-root-upload-authority argument required when validator is voting");
+                    }
+                    Pubkey::new_unique()
+                }),
+            vote_account: pubkey_of(matches, "vote_account").unwrap_or_else(|| {
+                if !voting_disabled {
+                    panic!("--vote-account argument required when validator is voting");
+                }
+                Pubkey::new_unique()
+            }),
+            commission_bps: value_t!(matches, "commission_bps", u16).unwrap_or_else(|_| {
+                if !voting_disabled {
+                    panic!("--commission-bps argument required when validator is voting");
+                }
+                0
+            }),
+        },
     }
 }
