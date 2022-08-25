@@ -10,10 +10,15 @@ use {
     rayon::prelude::*,
     solana_client::connection_cache::ConnectionCache,
     solana_core::{
+<<<<<<< HEAD
         banking_stage::{
             committer::Committer, consumer::Consumer, BankingStage, BankingStageStats,
         },
         banking_trace::{BankingPacketBatch, BankingTracer},
+=======
+        banking_stage::{BankingStage, BankingStageStats},
+        bundle_account_locker::BundleAccountLocker,
+>>>>>>> cded79df73 (jito patch)
         leader_slot_banking_stage_metrics::LeaderSlotMetricsTracker,
         qos_service::QosService,
         unprocessed_packet_batches::*,
@@ -50,7 +55,11 @@ use {
         vote_state::VoteStateUpdate, vote_transaction::new_vote_state_update_transaction,
     },
     std::{
+<<<<<<< HEAD
         iter::repeat_with,
+=======
+        collections::HashSet,
+>>>>>>> cded79df73 (jito patch)
         sync::{atomic::Ordering, Arc, RwLock},
         time::{Duration, Instant},
     },
@@ -61,8 +70,15 @@ fn check_txs(receiver: &Arc<Receiver<WorkingBankEntry>>, ref_tx_count: usize) {
     let mut total = 0;
     let now = Instant::now();
     loop {
-        if let Ok((_bank, (entry, _tick_height))) = receiver.recv_timeout(Duration::new(1, 0)) {
-            total += entry.transactions.len();
+        if let Ok(WorkingBankEntry {
+            bank: _,
+            entries_ticks,
+        }) = receiver.recv_timeout(Duration::new(1, 0))
+        {
+            total += entries_ticks
+                .iter()
+                .map(|e| e.0.transactions.len())
+                .sum::<usize>();
         }
         if total >= ref_tx_count {
             break;
@@ -114,6 +130,13 @@ fn bench_consume_buffered(bencher: &mut Bencher) {
                 &mut transaction_buffer,
                 &BankingStageStats::default(),
                 &mut LeaderSlotMetricsTracker::new(0),
+<<<<<<< HEAD
+=======
+                10,
+                None,
+                &HashSet::default(),
+                &BundleAccountLocker::default(),
+>>>>>>> cded79df73 (jito patch)
             );
         });
 
@@ -299,7 +322,12 @@ fn bench_banking(bencher: &mut Bencher, tx_type: TransactionType) {
             None,
             Arc::new(ConnectionCache::new("connection_cache_test")),
             bank_forks,
+<<<<<<< HEAD
             &Arc::new(PrioritizationFeeCache::new(0u64)),
+=======
+            HashSet::new(),
+            BundleAccountLocker::default(),
+>>>>>>> cded79df73 (jito patch)
         );
 
         let chunk_len = verified.len() / CHUNKS;

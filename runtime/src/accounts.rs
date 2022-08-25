@@ -1165,15 +1165,21 @@ impl Accounts {
         account_locks: &mut AccountLocks,
         writable_keys: Vec<&Pubkey>,
         readonly_keys: Vec<&Pubkey>,
+        additional_read_locks: &HashSet<Pubkey>,
+        additional_write_locks: &HashSet<Pubkey>,
     ) -> Result<()> {
         for k in writable_keys.iter() {
-            if account_locks.is_locked_write(k) || account_locks.is_locked_readonly(k) {
+            if account_locks.is_locked_write(k)
+                || account_locks.is_locked_readonly(k)
+                || additional_write_locks.contains(k)
+                || additional_read_locks.contains(k)
+            {
                 debug!("Writable account in use: {:?}", k);
                 return Err(TransactionError::AccountInUse);
             }
         }
         for k in readonly_keys.iter() {
-            if account_locks.is_locked_write(k) {
+            if account_locks.is_locked_write(k) || additional_write_locks.contains(k) {
                 debug!("Read-only account in use: {:?}", k);
                 return Err(TransactionError::AccountInUse);
             }
@@ -1218,7 +1224,23 @@ impl Accounts {
         let tx_account_locks_results: Vec<Result<_>> = txs
             .map(|tx| tx.get_account_locks(tx_account_lock_limit))
             .collect();
-        self.lock_accounts_inner(tx_account_locks_results)
+        self.lock_accounts_inner(
+            tx_account_locks_results,
+            &HashSet::default(),
+            &HashSet::default(),
+        )
+    }
+
+    pub fn lock_accounts_sequential_with_results<'a>(
+        &self,
+        txs: impl Iterator<Item = &'a SanitizedTransaction>,
+        tx_account_lock_limit: usize,
+        account_locks_override: Option<Mutex<AccountLocks>>,
+    ) -> Vec<Result<()>> {
+        let tx_account_locks_results: Vec<Result<_>> = txs
+            .map(|tx| tx.get_account_locks(tx_account_lock_limit))
+            .collect();
+        self.lock_accounts_sequential_inner(tx_account_locks_results, account_locks_override)
     }
 
     #[must_use]
@@ -1228,6 +1250,8 @@ impl Accounts {
         txs: impl Iterator<Item = &'a SanitizedTransaction>,
         results: impl Iterator<Item = Result<()>>,
         tx_account_lock_limit: usize,
+        additional_read_locks: &HashSet<Pubkey>,
+        additional_write_locks: &HashSet<Pubkey>,
     ) -> Vec<Result<()>> {
         let tx_account_locks_results: Vec<Result<_>> = txs
             .zip(results)
@@ -1236,13 +1260,19 @@ impl Accounts {
                 Err(err) => Err(err),
             })
             .collect();
-        self.lock_accounts_inner(tx_account_locks_results)
+        self.lock_accounts_inner(
+            tx_account_locks_results,
+            additional_read_locks,
+            additional_write_locks,
+        )
     }
 
     #[must_use]
     fn lock_accounts_inner(
         &self,
         tx_account_locks_results: Vec<Result<TransactionAccountLocks>>,
+        additional_read_locks: &HashSet<Pubkey>,
+        additional_write_locks: &HashSet<Pubkey>,
     ) -> Vec<Result<()>> {
         let account_locks = &mut self.account_locks.lock().unwrap();
         tx_account_locks_results
@@ -1252,7 +1282,46 @@ impl Accounts {
                     account_locks,
                     tx_account_locks.writable,
                     tx_account_locks.readonly,
+                    additional_read_locks,
+                    additional_write_locks,
                 ),
+                Err(err) => Err(err),
+            })
+            .collect()
+    }
+
+    #[must_use]
+    fn lock_accounts_sequential_inner(
+        &self,
+        tx_account_locks_results: Vec<Result<TransactionAccountLocks>>,
+        account_locks_override: Option<Mutex<AccountLocks>>,
+    ) -> Vec<Result<()>> {
+        let mut l_account_locks = if let Some(ref account_locks) = account_locks_override {
+            account_locks.lock().unwrap()
+        } else {
+            self.account_locks.lock().unwrap()
+        };
+
+        let mut account_in_use_set = false;
+        tx_account_locks_results
+            .into_iter()
+            .map(|tx_account_locks_result| match tx_account_locks_result {
+                Ok(tx_account_locks) => match account_in_use_set {
+                    true => Err(TransactionError::BundleNotContinuous),
+                    false => {
+                        let locked = self.lock_account(
+                            &mut l_account_locks,
+                            tx_account_locks.writable,
+                            tx_account_locks.readonly,
+                            &HashSet::default(),
+                            &HashSet::default(),
+                        );
+                        if matches!(locked, Err(TransactionError::AccountInUse)) {
+                            account_in_use_set = true;
+                        }
+                        locked
+                    }
+                },
                 Err(err) => Err(err),
             })
             .collect()
@@ -1270,6 +1339,7 @@ impl Accounts {
             .filter_map(|(tx, res)| match res {
                 Err(TransactionError::AccountLoadedTwice)
                 | Err(TransactionError::AccountInUse)
+                | Err(TransactionError::BundleNotContinuous)
                 | Err(TransactionError::SanitizeFailure)
                 | Err(TransactionError::TooManyAccountLocks)
                 | Err(TransactionError::WouldExceedMaxBlockCostLimit)
@@ -1301,7 +1371,7 @@ impl Accounts {
         lamports_per_signature: u64,
         include_slot_in_hash: IncludeSlotInHash,
     ) {
-        let (accounts_to_store, transactions) = self.collect_accounts_to_store(
+        let (accounts_to_store, transactions) = Self::collect_accounts_to_store(
             txs,
             res,
             loaded,
@@ -1328,8 +1398,7 @@ impl Accounts {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn collect_accounts_to_store<'a>(
-        &self,
+    pub fn collect_accounts_to_store<'a>(
         txs: &'a [SanitizedTransaction],
         execution_results: &'a [TransactionExecutionResult],
         load_results: &'a mut [TransactionLoadResult],
@@ -1487,6 +1556,7 @@ mod tests {
             sync::atomic::{AtomicBool, AtomicU64, Ordering},
             thread, time,
         },
+        Accounts,
     };
 
     fn new_sanitized_tx<T: Signers>(
@@ -3150,6 +3220,8 @@ mod tests {
             txs.iter(),
             qos_results.into_iter(),
             MAX_TX_ACCOUNT_LOCKS,
+            &HashSet::default(),
+            &HashSet::default(),
         );
 
         assert!(results[0].is_ok()); // Read-only account (keypair0) can be referenced multiple times
@@ -3735,7 +3807,7 @@ mod tests {
         let mut loaded = vec![loaded];
 
         let durable_nonce = DurableNonce::from_blockhash(&Hash::new_unique());
-        let accounts = Accounts::new_with_config_for_tests(
+        let _accounts = Accounts::new_with_config_for_tests(
             Vec::new(),
             &ClusterType::Development,
             AccountSecondaryIndexes::default(),
@@ -3749,7 +3821,7 @@ mod tests {
             )),
             nonce.as_ref(),
         )];
-        let (collected_accounts, _) = accounts.collect_accounts_to_store(
+        let (collected_accounts, _) = Accounts::collect_accounts_to_store(
             &txs,
             &execution_results,
             loaded.as_mut_slice(),
@@ -3848,7 +3920,7 @@ mod tests {
         let mut loaded = vec![loaded];
 
         let durable_nonce = DurableNonce::from_blockhash(&Hash::new_unique());
-        let accounts = Accounts::new_with_config_for_tests(
+        let _accounts = Accounts::new_with_config_for_tests(
             Vec::new(),
             &ClusterType::Development,
             AccountSecondaryIndexes::default(),
@@ -3862,7 +3934,7 @@ mod tests {
             )),
             nonce.as_ref(),
         )];
-        let (collected_accounts, _) = accounts.collect_accounts_to_store(
+        let (collected_accounts, _) = Accounts::collect_accounts_to_store(
             &txs,
             &execution_results,
             loaded.as_mut_slice(),

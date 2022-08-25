@@ -47,6 +47,7 @@ export rust_nightly_docker_image=solanalabs/rust-nightly:"$nightly_version"
       echo "$0: Missing toolchain? Installing...: $toolchain" >&2
       rustup install "$toolchain"
       cargo +"$toolchain" -V
+      rustup component add rustfmt --toolchain "$toolchain"
     fi
   }
 

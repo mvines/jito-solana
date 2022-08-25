@@ -192,7 +192,7 @@ all_test_steps() {
       queue: "gcp"
 EOF
   else
-    annotate --style info \
+    annotate --style info --context test-stable-bpf \
       "Stable-SBF skipped as no relevant files were modified"
   fi
 
@@ -219,7 +219,7 @@ EOF
       queue: "cuda"
 EOF
   else
-    annotate --style info \
+    annotate --style info --context test-stable-perf \
       "Stable-perf skipped as no relevant files were modified"
   fi
 
@@ -244,7 +244,7 @@ EOF
     timeout_in_minutes: 30
 EOF
   else
-    annotate --style info \
+    annotate --style info --context test-downstream-projects \
       "downstream-projects skipped as no relevant files were modified"
   fi
 
@@ -254,9 +254,11 @@ EOF
              ^ci/test-stable.sh \
              ^sdk/ \
       ; then
-    command_step wasm ". ci/rust-version.sh; ci/docker-run.sh \$\$rust_stable_docker_image ci/test-wasm.sh" 20
+        annotate --style warning --context test-wasm  \
+                      "test-wasm is currently disabled because it times out (LB)"
+#    command_step wasm ". ci/rust-version.sh; ci/docker-run.sh \$\$rust_stable_docker_image ci/test-wasm.sh" 20
   else
-    annotate --style info \
+    annotate --style info --context test-wasm \
       "wasm skipped as no relevant files were modified"
   fi
 
@@ -319,7 +321,7 @@ if [[ -n $BUILDKITE_TAG ]]; then
     "https://github.com/solana-labs/solana/releases/$BUILDKITE_TAG"
 
   # Jump directly to the secondary build to publish release artifacts quickly
-  trigger_secondary_step
+#  trigger_secondary_step
   exit 0
 fi
 
@@ -347,5 +349,5 @@ fi
 start_pipeline "Push pipeline for ${BUILDKITE_BRANCH:-?unknown branch?}"
 pull_or_push_steps
 wait_step
-trigger_secondary_step
+#trigger_secondary_step
 exit 0

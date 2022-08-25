@@ -1,4 +1,6 @@
 #![allow(clippy::integer_arithmetic)]
+
+use solana_core::bundle_account_locker::BundleAccountLocker;
 use {
     clap::{crate_description, crate_name, Arg, ArgEnum, Command},
     crossbeam_channel::{unbounded, Receiver},
@@ -7,7 +9,7 @@ use {
     rayon::prelude::*,
     solana_client::connection_cache::ConnectionCache,
     solana_core::{
-        banking_stage::BankingStage,
+        banking_stage::{bundle_account_locker::BundleAccountLocker, BankingStage},
         banking_trace::{BankingPacketBatch, BankingTracer, BANKING_TRACE_DIR_DEFAULT_BYTE_LIMIT},
     },
     solana_gossip::cluster_info::{ClusterInfo, Node},
@@ -36,6 +38,7 @@ use {
     solana_streamer::socket::SocketAddrSpace,
     solana_tpu_client::tpu_client::DEFAULT_TPU_CONNECTION_POOL_SIZE,
     std::{
+        collections::HashSet,
         sync::{atomic::Ordering, Arc, RwLock},
         thread::sleep,
         time::{Duration, Instant},
@@ -57,9 +60,15 @@ fn check_txs(
     let now = Instant::now();
     let mut no_bank = false;
     loop {
-        if let Ok((_bank, (entry, _tick_height))) = receiver.recv_timeout(Duration::from_millis(10))
+        if let Ok(WorkingBankEntry {
+            bank: _,
+            entries_ticks,
+        }) = receiver.recv_timeout(Duration::from_millis(10))
         {
-            total += entry.transactions.len();
+            total += entries_ticks
+                .iter()
+                .map(|e| e.0.transactions.len())
+                .sum::<usize>();
         }
         if total >= ref_tx_count {
             break;
@@ -459,6 +468,8 @@ fn main() {
             Arc::new(connection_cache),
             bank_forks.clone(),
             &Arc::new(PrioritizationFeeCache::new(0u64)),
+            HashSet::default(),
+            BundleAccountLocker::default(),
         );
 
         // This is so that the signal_receiver does not go out of scope after the closure.

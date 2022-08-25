@@ -161,6 +161,14 @@ pub enum TransactionError {
     /// Sanitized transaction differed before/after feature activiation. Needs to be resanitized.
     #[error("ResanitizationNeeded")]
     ResanitizationNeeded,
+
+    /// Bundle is not continuous
+    #[error("Bundle is not continuous")]
+    BundleNotContinuous,
+
+    /// This error type should be used when a transaction in a bundle is not executed due to an earlier tx error.
+    #[error("Transaction did not execute.")]
+    SkippedExecution,
 }
 
 impl From<SanitizeError> for TransactionError {

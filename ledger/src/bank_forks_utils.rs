@@ -107,6 +107,7 @@ pub fn load_bank_forks(
 
         if snapshot_utils::get_highest_full_snapshot_archive_info(
             &snapshot_config.full_snapshot_archives_dir,
+            process_options.halt_at_slot,
         )
         .is_some()
         {
@@ -189,7 +190,7 @@ pub fn load_bank_forks(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn bank_forks_from_snapshot(
+pub fn bank_forks_from_snapshot(
     genesis_config: &GenesisConfig,
     account_paths: Vec<PathBuf>,
     shrink_paths: Option<Vec<PathBuf>>,
@@ -229,6 +230,7 @@ fn bank_forks_from_snapshot(
             process_options.accounts_db_config.clone(),
             accounts_update_notifier,
             exit,
+            process_options.halt_at_slot,
         )
         .expect("Load from snapshot failed");
 
