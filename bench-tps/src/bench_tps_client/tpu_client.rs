@@ -5,6 +5,7 @@ use {
         account::Account, commitment_config::CommitmentConfig, epoch_info::EpochInfo, hash::Hash,
         message::Message, pubkey::Pubkey, signature::Signature, transaction::Transaction,
     },
+    solana_tpu_client::tpu_client::TpuClient,
 };
 
 impl BenchTpsClient for TpuClient {
@@ -117,5 +118,11 @@ impl BenchTpsClient for TpuClient {
                     BenchTpsError::Custom(format!("AccountNotFound: pubkey={}", pubkey))
                 })
             })
+    }
+
+    fn get_multiple_accounts(&self, pubkeys: &[Pubkey]) -> Result<Vec<Option<Account>>> {
+        self.rpc_client()
+            .get_multiple_accounts(pubkeys)
+            .map_err(|err| err.into())
     }
 }

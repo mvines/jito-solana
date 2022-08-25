@@ -1230,12 +1230,16 @@ impl<T: IndexValue> AccountsIndex<T> {
         )
     }
 
-    pub fn get_rooted_entries(&self, slice: SlotSlice<T>, max: Option<Slot>) -> SlotList<T> {
-        let max = max.unwrap_or(Slot::MAX);
+    pub fn get_rooted_entries(
+        &self,
+        slice: SlotSlice<T>,
+        max_inclusive: Option<Slot>,
+    ) -> SlotList<T> {
+        let max_inclusive = max_inclusive.unwrap_or(Slot::MAX);
         let lock = &self.roots_tracker.read().unwrap().alive_roots;
         slice
             .iter()
-            .filter(|(slot, _)| *slot <= max && lock.contains(slot))
+            .filter(|(slot, _)| *slot <= max_inclusive && lock.contains(slot))
             .cloned()
             .collect()
     }
@@ -1244,10 +1248,10 @@ impl<T: IndexValue> AccountsIndex<T> {
     pub fn roots_and_ref_count(
         &self,
         locked_account_entry: &ReadAccountMapEntry<T>,
-        max: Option<Slot>,
+        max_inclusive: Option<Slot>,
     ) -> (SlotList<T>, RefCount) {
         (
-            self.get_rooted_entries(locked_account_entry.slot_list(), max),
+            self.get_rooted_entries(locked_account_entry.slot_list(), max_inclusive),
             locked_account_entry.ref_count(),
         )
     }
@@ -1413,17 +1417,17 @@ impl<T: IndexValue> AccountsIndex<T> {
     fn get_newest_root_in_slot_list(
         alive_roots: &RollingBitField,
         slice: SlotSlice<T>,
-        max_allowed_root: Option<Slot>,
+        max_allowed_root_inclusive: Option<Slot>,
     ) -> Slot {
         let mut max_root = 0;
-        for (f, _) in slice.iter() {
-            if let Some(max_allowed_root) = max_allowed_root {
-                if *f > max_allowed_root {
+        for (slot, _) in slice.iter() {
+            if let Some(max_allowed_root_inclusive) = max_allowed_root_inclusive {
+                if *slot > max_allowed_root_inclusive {
                     continue;
                 }
             }
-            if *f > max_root && alive_roots.contains(f) {
-                max_root = *f;
+            if *slot > max_root && alive_roots.contains(slot) {
+                max_root = *slot;
             }
         }
         max_root
@@ -1689,23 +1693,28 @@ impl<T: IndexValue> AccountsIndex<T> {
         &self,
         slot_list: &mut SlotList<T>,
         reclaims: &mut SlotList<T>,
-        max_clean_root: Option<Slot>,
+        max_clean_root_inclusive: Option<Slot>,
     ) {
         let newest_root_in_slot_list;
-        let max_clean_root = {
+        let max_clean_root_inclusive = {
             let roots_tracker = &self.roots_tracker.read().unwrap();
             newest_root_in_slot_list = Self::get_newest_root_in_slot_list(
                 &roots_tracker.alive_roots,
                 slot_list,
-                max_clean_root,
+                max_clean_root_inclusive,
             );
-            max_clean_root.unwrap_or_else(|| roots_tracker.alive_roots.max_inclusive())
+            max_clean_root_inclusive.unwrap_or_else(|| roots_tracker.alive_roots.max_inclusive())
         };
 
         slot_list.retain(|(slot, value)| {
-            let should_purge =
-                Self::can_purge_older_entries(max_clean_root, newest_root_in_slot_list, *slot)
-                    && !value.is_cached();
+            let should_purge = Self::can_purge_older_entries(
+                // Note that we have a root that is inclusive here.
+                // Calling a function that expects 'exclusive'
+                // This is expected behavior for this call.
+                max_clean_root_inclusive,
+                newest_root_in_slot_list,
+                *slot,
+            ) && !value.is_cached();
             if should_purge {
                 reclaims.push((*slot, *value));
             }
@@ -1738,21 +1747,21 @@ impl<T: IndexValue> AccountsIndex<T> {
     /// When can an entry be purged?
     ///
     /// If we get a slot update where slot != newest_root_in_slot_list for an account where slot <
-    /// max_clean_root, then we know it's safe to delete because:
+    /// max_clean_root_exclusive, then we know it's safe to delete because:
     ///
     /// a) If slot < newest_root_in_slot_list, then we know the update is outdated by a later rooted
     /// update, namely the one in newest_root_in_slot_list
     ///
-    /// b) If slot > newest_root_in_slot_list, then because slot < max_clean_root and we know there are
-    /// no roots in the slot list between newest_root_in_slot_list and max_clean_root, (otherwise there
+    /// b) If slot > newest_root_in_slot_list, then because slot < max_clean_root_exclusive and we know there are
+    /// no roots in the slot list between newest_root_in_slot_list and max_clean_root_exclusive, (otherwise there
     /// would be a bigger newest_root_in_slot_list, which is a contradiction), then we know slot must be
-    /// an unrooted slot less than max_clean_root and thus safe to clean as well.
+    /// an unrooted slot less than max_clean_root_exclusive and thus safe to clean as well.
     fn can_purge_older_entries(
-        max_clean_root: Slot,
+        max_clean_root_exclusive: Slot,
         newest_root_in_slot_list: Slot,
         slot: Slot,
     ) -> bool {
-        slot < max_clean_root && slot != newest_root_in_slot_list
+        slot < max_clean_root_exclusive && slot != newest_root_in_slot_list
     }
 
     /// Given a list of slots, return a new list of only the slots that are rooted

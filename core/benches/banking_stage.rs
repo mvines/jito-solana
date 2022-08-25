@@ -8,7 +8,6 @@ use {
     log::*,
     rand::{thread_rng, Rng},
     rayon::prelude::*,
-    solana_client::connection_cache::ConnectionCache,
     solana_core::{
         banking_stage::{BankingStage, BankingStageStats},
         bundle_account_locker::BundleAccountLocker,
@@ -38,6 +37,7 @@ use {
         transaction::{Transaction, VersionedTransaction},
     },
     solana_streamer::socket::SocketAddrSpace,
+    solana_tpu_client::connection_cache::ConnectionCache,
     std::{
         collections::HashSet,
         sync::{atomic::Ordering, Arc, RwLock},

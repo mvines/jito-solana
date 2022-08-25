@@ -1,6 +1,6 @@
 use {
     crate::bench_tps_client::{BenchTpsClient, BenchTpsError, Result},
-    solana_client::rpc_client::RpcClient,
+    solana_rpc_client::rpc_client::RpcClient,
     solana_sdk::{
         account::Account, commitment_config::CommitmentConfig, epoch_info::EpochInfo, hash::Hash,
         message::Message, pubkey::Pubkey, signature::Signature, transaction::Transaction,
@@ -98,5 +98,8 @@ impl BenchTpsClient for RpcClient {
                     BenchTpsError::Custom(format!("AccountNotFound: pubkey={}", pubkey))
                 })
             })
+    }
+    fn get_multiple_accounts(&self, pubkeys: &[Pubkey]) -> Result<Vec<Option<Account>>> {
+        RpcClient::get_multiple_accounts(self, pubkeys).map_err(|err| err.into())
     }
 }

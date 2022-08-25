@@ -1,7 +1,9 @@
 use {
     crate::result::Result,
+    bincode::serialized_size,
     crossbeam_channel::Receiver,
     solana_entry::entry::Entry,
+    solana_ledger::shred::ShredData,
     solana_poh::poh_recorder::WorkingBankEntry,
     solana_runtime::bank::Bank,
     solana_sdk::clock::Slot,
@@ -10,6 +12,8 @@ use {
         time::{Duration, Instant},
     },
 };
+
+const ENTRY_COALESCE_DURATION: Duration = Duration::from_millis(50);
 
 pub(super) struct ReceiveResults {
     pub entries: Vec<Entry>,
@@ -26,12 +30,9 @@ pub struct UnfinishedSlotInfo {
     pub parent: Slot,
 }
 
-/// This parameter tunes how many entries are received in one iteration of recv loop
-/// This will prevent broadcast stage from consuming more entries, that could have led
-/// to delays in shredding, and broadcasting shreds to peer validators
-const RECEIVE_ENTRY_COUNT_THRESHOLD: usize = 8;
-
 pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result<ReceiveResults> {
+    let target_serialized_batch_byte_count: u64 =
+        32 * ShredData::capacity(/*merkle_proof_size*/ None).unwrap() as u64;
     let timer = Duration::new(1, 0);
     let recv_start = Instant::now();
     let WorkingBankEntry {
@@ -76,6 +77,11 @@ pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result
                 break;
             }
         }
+        last_tick_height = tick_height;
+        let entry_bytes = serialized_size(&entry)?;
+        serialized_batch_byte_count += entry_bytes;
+        entries.push(entry);
+        assert!(last_tick_height <= bank.max_tick_height());
     }
 
     Ok(ReceiveResults {

@@ -12,6 +12,7 @@ use {
         signature::Signature,
         transaction::Transaction,
     },
+    solana_thin_client::thin_client::ThinClient,
 };
 
 impl BenchTpsClient for ThinClient {
@@ -103,5 +104,10 @@ impl BenchTpsClient for ThinClient {
                     BenchTpsError::Custom(format!("AccountNotFound: pubkey={}", pubkey))
                 })
             })
+    }
+    fn get_multiple_accounts(&self, pubkeys: &[Pubkey]) -> Result<Vec<Option<Account>>> {
+        self.rpc_client()
+            .get_multiple_accounts(pubkeys)
+            .map_err(|err| err.into())
     }
 }

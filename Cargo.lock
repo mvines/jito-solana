@@ -295,7 +295,7 @@ dependencies = [
  "num-traits",
  "rusticata-macros",
  "thiserror",
- "time 0.3.13",
+ "time 0.3.14",
 ]
 
 [[package]]
@@ -1951,7 +1951,7 @@ dependencies = [
  "serde_json",
  "simpl",
  "smpl_jwt",
- "time 0.3.13",
+ "time 0.3.14",
  "tokio",
 ]
 
@@ -4011,7 +4011,7 @@ checksum = "6413f3de1edee53342e6138e75b56d32e7bc6e332b3bd62d497b1929d4cfbcdd"
 dependencies = [
  "pem",
  "ring",
- "time 0.3.13",
+ "time 0.3.14",
  "yasna",
 ]
 
@@ -4635,7 +4635,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "simpl",
- "time 0.3.13",
+ "time 0.3.14",
 ]
 
 [[package]]
@@ -4718,6 +4718,7 @@ dependencies = [
  "solana-logger 1.12.0",
  "solana-measure",
  "solana-net-utils",
+ "solana-rpc-client",
  "solana-runtime",
  "solana-sdk 1.12.0",
  "solana-streamer",
@@ -4777,6 +4778,7 @@ dependencies = [
  "solana-runtime",
  "solana-sdk 1.12.0",
  "solana-streamer",
+ "solana-tpu-client",
  "solana-version",
 ]
 
@@ -4820,6 +4822,7 @@ dependencies = [
  "solana-sdk 1.12.0",
  "solana-send-transaction-service",
  "solana-streamer",
+ "solana-tpu-client",
  "tarpc",
  "tokio",
  "tokio-serde",
@@ -4877,10 +4880,15 @@ dependencies = [
  "solana-metrics",
  "solana-net-utils",
  "solana-rpc",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
+ "solana-rpc-client-nonce-utils",
  "solana-runtime",
  "solana-sdk 1.12.0",
  "solana-streamer",
  "solana-test-validator",
+ "solana-thin-client",
+ "solana-tpu-client",
  "solana-version",
  "thiserror",
 ]
@@ -5057,10 +5065,15 @@ dependencies = [
  "solana-faucet",
  "solana-logger 1.12.0",
  "solana-program-runtime",
+ "solana-pubsub-client",
  "solana-remote-wallet",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
+ "solana-rpc-client-nonce-utils",
  "solana-sdk 1.12.0",
  "solana-streamer",
  "solana-test-validator",
+ "solana-tpu-client",
  "solana-transaction-status",
  "solana-version",
  "solana-vote-program",
@@ -5105,7 +5118,7 @@ dependencies = [
  "solana-account-decoder",
  "solana-clap-utils",
  "solana-cli-config",
- "solana-client",
+ "solana-rpc-client-api",
  "solana-sdk 1.12.0",
  "solana-transaction-status",
  "solana-vote-program",
@@ -5116,58 +5129,15 @@ dependencies = [
 name = "solana-client"
 version = "1.12.0"
 dependencies = [
- "anyhow",
- "assert_matches",
- "async-mutex",
- "async-trait",
- "base64 0.13.0",
- "bincode",
- "bs58 0.4.0",
- "bytes",
- "clap 2.34.0",
- "crossbeam-channel",
- "enum_dispatch",
- "futures 0.3.23",
- "futures-util",
- "indexmap",
- "indicatif",
- "itertools",
- "jsonrpc-core",
- "jsonrpc-http-server",
- "lazy_static",
  "log",
- "quinn",
- "quinn-proto",
- "quinn-udp",
- "rand 0.7.3",
- "rand_chacha 0.2.2",
- "rayon",
- "reqwest",
- "rustls 0.20.6",
- "semver",
- "serde",
- "serde_derive",
- "serde_json",
- "solana-account-decoder",
- "solana-clap-utils",
- "solana-faucet",
- "solana-logger 1.12.0",
  "solana-measure",
- "solana-metrics",
- "solana-net-utils",
- "solana-perf",
+ "solana-pubsub-client",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
+ "solana-rpc-client-nonce-utils",
  "solana-sdk 1.12.0",
- "solana-streamer",
- "solana-transaction-status",
- "solana-version",
- "solana-vote-program",
- "spl-token-2022",
- "thiserror",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite",
- "tungstenite",
- "url 2.2.2",
+ "solana-thin-client",
+ "solana-tpu-client",
 ]
 
 [[package]]
@@ -5177,15 +5147,17 @@ dependencies = [
  "futures-util",
  "serde_json",
  "serial_test",
- "solana-client",
  "solana-ledger",
  "solana-logger 1.12.0",
  "solana-measure",
  "solana-merkle-tree",
  "solana-metrics",
  "solana-perf",
+ "solana-pubsub-client",
  "solana-rayon-threadlimit",
  "solana-rpc",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-runtime",
  "solana-sdk 1.12.0",
  "solana-streamer",
@@ -5274,11 +5246,13 @@ dependencies = [
  "solana-program-runtime",
  "solana-rayon-threadlimit",
  "solana-rpc",
+ "solana-rpc-client-api",
  "solana-runtime",
  "solana-sdk 1.12.0",
  "solana-send-transaction-service",
  "solana-stake-program",
  "solana-streamer",
+ "solana-tpu-client",
  "solana-transaction-status",
  "solana-version",
  "solana-vote-program",
@@ -5312,7 +5286,6 @@ dependencies = [
  "serde",
  "serial_test",
  "solana-bench-tps",
- "solana-client",
  "solana-core",
  "solana-faucet",
  "solana-gossip",
@@ -5322,8 +5295,11 @@ dependencies = [
  "solana-net-utils",
  "solana-perf",
  "solana-rpc",
+ "solana-rpc-client",
  "solana-sdk 1.12.0",
  "solana-streamer",
+ "solana-thin-client",
+ "solana-tpu-client",
  "solana-version",
 ]
 
@@ -5572,7 +5548,6 @@ dependencies = [
  "serial_test",
  "solana-bloom",
  "solana-clap-utils",
- "solana-client",
  "solana-entry",
  "solana-frozen-abi 1.12.0",
  "solana-frozen-abi-macro 1.12.0",
@@ -5586,6 +5561,8 @@ dependencies = [
  "solana-runtime",
  "solana-sdk 1.12.0",
  "solana-streamer",
+ "solana-thin-client",
+ "solana-tpu-client",
  "solana-version",
  "solana-vote-program",
  "thiserror",
@@ -5612,9 +5589,9 @@ dependencies = [
  "serde",
  "serde_yaml",
  "solana-clap-utils",
- "solana-client",
  "solana-config-program",
  "solana-logger 1.12.0",
+ "solana-rpc-client",
  "solana-sdk 1.12.0",
  "solana-version",
  "tar",
@@ -5753,7 +5730,6 @@ dependencies = [
  "rand 0.7.3",
  "rayon",
  "serial_test",
- "solana-client",
  "solana-config-program",
  "solana-core",
  "solana-download-utils",
@@ -5761,10 +5737,15 @@ dependencies = [
  "solana-gossip",
  "solana-ledger",
  "solana-logger 1.12.0",
+ "solana-pubsub-client",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-runtime",
  "solana-sdk 1.12.0",
  "solana-stake-program",
  "solana-streamer",
+ "solana-thin-client",
+ "solana-tpu-client",
  "solana-vote-program",
  "tempfile",
 ]
@@ -6101,6 +6082,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-pubsub-client"
+version = "1.12.0"
+dependencies = [
+ "crossbeam-channel",
+ "futures-util",
+ "log",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "solana-account-decoder",
+ "solana-rpc-client-api",
+ "solana-sdk 1.12.0",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "tungstenite",
+ "url 2.2.2",
+]
+
+[[package]]
 name = "solana-rayon-threadlimit"
 version = "1.12.0"
 dependencies = [
@@ -6152,7 +6156,6 @@ dependencies = [
  "soketto",
  "solana-account-decoder",
  "solana-address-lookup-table-program",
- "solana-client",
  "solana-entry",
  "solana-faucet",
  "solana-gossip",
@@ -6163,12 +6166,14 @@ dependencies = [
  "solana-perf",
  "solana-poh",
  "solana-rayon-threadlimit",
+ "solana-rpc-client-api",
  "solana-runtime",
  "solana-sdk 1.12.0",
  "solana-send-transaction-service",
  "solana-stake-program",
  "solana-storage-bigtable",
  "solana-streamer",
+ "solana-tpu-client",
  "solana-transaction-status",
  "solana-version",
  "solana-vote-program",
@@ -6179,6 +6184,72 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util 0.6.10",
+]
+
+[[package]]
+name = "solana-rpc-client"
+version = "1.12.0"
+dependencies = [
+ "assert_matches",
+ "async-trait",
+ "base64 0.13.0",
+ "bincode",
+ "bs58 0.4.0",
+ "crossbeam-channel",
+ "futures 0.3.23",
+ "indicatif",
+ "jsonrpc-core",
+ "jsonrpc-http-server",
+ "log",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "solana-account-decoder",
+ "solana-rpc-client-api",
+ "solana-sdk 1.12.0",
+ "solana-transaction-status",
+ "solana-version",
+ "solana-vote-program",
+ "tokio",
+]
+
+[[package]]
+name = "solana-rpc-client-api"
+version = "1.12.0"
+dependencies = [
+ "base64 0.13.0",
+ "bs58 0.4.0",
+ "jsonrpc-core",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "solana-account-decoder",
+ "solana-sdk 1.12.0",
+ "solana-transaction-status",
+ "solana-version",
+ "spl-token-2022",
+ "thiserror",
+]
+
+[[package]]
+name = "solana-rpc-client-nonce-utils"
+version = "1.12.0"
+dependencies = [
+ "anyhow",
+ "clap 2.34.0",
+ "futures 0.3.23",
+ "serde_json",
+ "solana-account-decoder",
+ "solana-clap-utils",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
+ "solana-sdk 1.12.0",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -6194,12 +6265,15 @@ dependencies = [
  "serde",
  "serde_json",
  "solana-account-decoder",
- "solana-client",
  "solana-logger 1.12.0",
+ "solana-pubsub-client",
  "solana-rpc",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-sdk 1.12.0",
  "solana-streamer",
  "solana-test-validator",
+ "solana-tpu-client",
  "solana-transaction-status",
  "tokio",
 ]
@@ -6404,14 +6478,13 @@ version = "1.12.0"
 dependencies = [
  "crossbeam-channel",
  "log",
- "solana-client",
  "solana-gossip",
  "solana-logger 1.12.0",
  "solana-measure",
  "solana-metrics",
  "solana-runtime",
  "solana-sdk 1.12.0",
- "solana-streamer",
+ "solana-tpu-client",
 ]
 
 [[package]]
@@ -6421,8 +6494,9 @@ dependencies = [
  "clap 2.34.0",
  "solana-clap-utils",
  "solana-cli-config",
- "solana-client",
  "solana-remote-wallet",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-runtime",
  "solana-sdk 1.12.0",
  "solana-stake-program",
@@ -6576,10 +6650,26 @@ dependencies = [
  "solana-program-runtime",
  "solana-program-test",
  "solana-rpc",
+ "solana-rpc-client",
  "solana-runtime",
  "solana-sdk 1.12.0",
  "solana-streamer",
+ "solana-tpu-client",
  "tokio",
+]
+
+[[package]]
+name = "solana-thin-client"
+version = "1.12.0"
+dependencies = [
+ "bincode",
+ "log",
+ "rayon",
+ "solana-logger 1.12.0",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
+ "solana-sdk 1.12.0",
+ "solana-tpu-client",
 ]
 
 [[package]]
@@ -6627,9 +6717,10 @@ dependencies = [
  "solana-account-decoder",
  "solana-clap-utils",
  "solana-cli-config",
- "solana-client",
  "solana-logger 1.12.0",
  "solana-remote-wallet",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-sdk 1.12.0",
  "solana-streamer",
  "solana-test-validator",
@@ -6639,6 +6730,43 @@ dependencies = [
  "spl-token",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "solana-tpu-client"
+version = "1.12.0"
+dependencies = [
+ "async-mutex",
+ "async-trait",
+ "bincode",
+ "crossbeam-channel",
+ "enum_dispatch",
+ "futures 0.3.23",
+ "futures-util",
+ "indexmap",
+ "indicatif",
+ "itertools",
+ "lazy_static",
+ "log",
+ "quinn",
+ "quinn-proto",
+ "quinn-udp",
+ "rand 0.7.3",
+ "rand_chacha 0.2.2",
+ "rayon",
+ "rustls 0.20.6",
+ "solana-logger 1.12.0",
+ "solana-measure",
+ "solana-metrics",
+ "solana-net-utils",
+ "solana-perf",
+ "solana-pubsub-client",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
+ "solana-sdk 1.12.0",
+ "solana-streamer",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -6660,6 +6788,7 @@ dependencies = [
  "solana-logger 1.12.0",
  "solana-measure",
  "solana-net-utils",
+ "solana-rpc-client",
  "solana-runtime",
  "solana-sdk 1.12.0",
  "solana-streamer",
@@ -6682,6 +6811,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "solana-account-decoder",
+ "solana-address-lookup-table-program",
  "solana-measure",
  "solana-metrics",
  "solana-sdk 1.12.0",
@@ -6728,7 +6858,6 @@ dependencies = [
  "signal-hook",
  "solana-clap-utils",
  "solana-cli-config",
- "solana-client",
  "solana-core",
  "solana-download-utils",
  "solana-entry",
@@ -6742,12 +6871,15 @@ dependencies = [
  "solana-perf",
  "solana-poh",
  "solana-rpc",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-runtime",
  "solana-sdk 1.12.0",
  "solana-send-transaction-service",
  "solana-storage-bigtable",
  "solana-streamer",
  "solana-test-validator",
+ "solana-tpu-client",
  "solana-version",
  "solana-vote-program",
  "symlink",
@@ -6800,10 +6932,11 @@ dependencies = [
  "solana-clap-utils",
  "solana-cli-config",
  "solana-cli-output",
- "solana-client",
  "solana-logger 1.12.0",
  "solana-metrics",
  "solana-notifier",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-sdk 1.12.0",
  "solana-version",
 ]
@@ -7308,9 +7441,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.13"
+version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db76ff9fa4b1458b3c7f077f3ff9887394058460d21e634355b273aaf11eea45"
+checksum = "3c3f9a28b618c3a6b9251b6908e9c99e04b9e5c02e6581ccbb67d59c34ef7f9b"
 dependencies = [
  "itoa 1.0.3",
  "libc",
@@ -8285,7 +8418,7 @@ dependencies = [
  "oid-registry",
  "rusticata-macros",
  "thiserror",
- "time 0.3.13",
+ "time 0.3.14",
 ]
 
 [[package]]
@@ -8318,7 +8451,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "346d34a236c9d3e5f3b9b74563f238f955bbd05fa0b8b4efa53c130c43982f4c"
 dependencies = [
- "time 0.3.13",
+ "time 0.3.14",
 ]
 
 [[package]]
