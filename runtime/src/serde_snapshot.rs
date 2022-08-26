@@ -305,6 +305,9 @@ where
     R: Read,
 {
     let (bank_fields, accounts_db_fields) = fields_from_streams(serde_style, snapshot_streams)?;
+    if halt_at_slot.is_some() && bank_fields.slot > halt_at_slot.unwrap() {
+        error!("streaming fields for slot: {}", bank_fields.slot);
+    }
     reconstruct_bank_from_fields(
         bank_fields,
         accounts_db_fields,
