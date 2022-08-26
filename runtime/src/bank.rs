@@ -2207,6 +2207,7 @@ impl Bank {
         additional_builtins: Option<&Builtins>,
         debug_do_not_add_builtins: bool,
         accounts_data_size_initial: u64,
+        halt_at_slot: Option<Slot>,
     ) -> Self {
         let now = Instant::now();
         let ancestors = Ancestors::from(&fields.ancestors);
@@ -2218,6 +2219,9 @@ impl Bank {
         // at the right slot and match precisely with serialized Delegations.
         let stakes = Stakes::new(&fields.stakes, |pubkey| {
             let (account, slot) = bank_rc.accounts.load_with_fixed_root(&ancestors, pubkey)?;
+            if halt_at_slot.is_some() && slot > halt_at_slot.unwrap() {
+                info!("Should have halted before {}", slot);
+            }
             Some(account)
         })
         .expect(

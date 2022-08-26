@@ -544,6 +544,7 @@ where
         additional_builtins,
         debug_do_not_add_builtins,
         reconstructed_accounts_db_info.accounts_data_len,
+        halt_at_slot,
     );
 
     info!("rent_collector: {:?}", bank.rent_collector());
