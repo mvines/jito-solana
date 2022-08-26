@@ -744,6 +744,7 @@ where
         &accounts_db,
         snapshot_historical_roots,
         snapshot_historical_roots_with_hash,
+        halt_at_slot,
     );
 
     // Remap the deserialized AppendVec paths to point to correct local paths
@@ -756,7 +757,6 @@ where
         &num_collisions
     )?);
 
-    // 0xspl.iff: this might be a good spot to drop by slot comparison
     if let Some(halt_at_slot) = halt_at_slot {
         info!("Storage size before shrinking to halt_to_slot: {}", storage.len());
         storage.retain(|slot, _| slot <= &halt_at_slot);
@@ -858,6 +858,7 @@ fn reconstruct_historical_roots(
     accounts_db: &AccountsDb,
     mut snapshot_historical_roots: Vec<Slot>,
     snapshot_historical_roots_with_hash: Vec<(Slot, Hash)>,
+    halt_at_slot: Option<Slot>,
 ) {
     // inflate 'historical_roots'
     // inserting into 'historical_roots' needs to be in order
@@ -871,6 +872,8 @@ fn reconstruct_historical_roots(
     snapshot_historical_roots.sort_unstable();
     let mut roots_tracker = accounts_db.accounts_index.roots_tracker.write().unwrap();
     snapshot_historical_roots.into_iter().for_each(|root| {
-        roots_tracker.historical_roots.insert(root);
+        if halt_at_slot.is_none() || halt_at_slot.unwrap() >= root {
+            roots_tracker.historical_roots.insert(root);
+        }
     });
 }
