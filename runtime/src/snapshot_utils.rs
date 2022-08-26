@@ -888,12 +888,13 @@ pub fn bank_fields_from_snapshot_archives(
     incremental_snapshot_archives_dir: impl AsRef<Path>,
 ) -> Result<BankFieldsToDeserialize> {
     let full_snapshot_archive_info =
-        get_highest_full_snapshot_archive_info(&full_snapshot_archives_dir)
+        get_highest_full_snapshot_archive_info(&full_snapshot_archives_dir, None)
             .ok_or(SnapshotError::NoSnapshotArchives)?;
 
     let incremental_snapshot_archive_info = get_highest_incremental_snapshot_archive_info(
         &incremental_snapshot_archives_dir,
         full_snapshot_archive_info.slot(),
+        None,
     );
 
     let temp_dir = tempfile::Builder::new()
@@ -1403,7 +1404,7 @@ pub fn get_incremental_snapshot_archives(
 pub fn get_highest_full_snapshot_archive_slot(
     full_snapshot_archives_dir: impl AsRef<Path>,
 ) -> Option<Slot> {
-    get_highest_full_snapshot_archive_info(full_snapshot_archives_dir)
+    get_highest_full_snapshot_archive_info(full_snapshot_archives_dir, None)
         .map(|full_snapshot_archive_info| full_snapshot_archive_info.slot())
 }
 
@@ -1416,6 +1417,7 @@ pub fn get_highest_incremental_snapshot_archive_slot(
     get_highest_incremental_snapshot_archive_info(
         incremental_snapshot_archives_dir,
         full_snapshot_slot,
+        None,
     )
     .map(|incremental_snapshot_archive_info| incremental_snapshot_archive_info.slot())
 }
