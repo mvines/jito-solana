@@ -243,9 +243,16 @@ impl Stakes<StakeAccount> {
                 || vote_account.executable() != account.executable()
                 || vote_account.data() != account.data()
             {
-                error!(
-                    "vote account mismatch: {}, {:?}, {:?}",
-                    pubkey, vote_account, account
+                error!("vote account mismatch: {}, {:?}, {:?} \n\
+                  {:?} = {:?} ? {} \n\
+                  {:?} = {:?} ? {} \n\
+                  {:?} = {:?} ? {} \n\
+                  {:?} = {:?} ? {}",
+                    pubkey, vote_account, account,
+                    vote_account.lamports(), account.lamports(), vote_account.lamports() != account.lamports(),
+                    vote_account.owner(), account.owner(), vote_account.owner() != account.owner(),
+                    vote_account.executable(), account.executable(), vote_account.executable() != account.executable(),
+                    vote_account.data(), account.data(), vote_account.data() != account.data(),
                 );
                 return Err(Error::VoteAccountMismatch(*pubkey));
             }
