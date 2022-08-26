@@ -25,7 +25,6 @@ use {
         sync::{Arc, RwLock},
     },
 };
-use solana_sdk::clock::Slot;
 
 pub type LoadResult = result::Result<
     (

@@ -1772,7 +1772,7 @@ fn rebuild_bank_from_snapshots(
             },
         )
         .join(SNAPSHOT_STATUS_CACHE_FILENAME);
-    let slot_deltas = deserialize_snapshot_data_file(&status_cache_path, |stream| {
+    let mut slot_deltas = deserialize_snapshot_data_file(&status_cache_path, |stream| {
         info!(
             "Rebuilding status cache from {}",
             status_cache_path.display()
@@ -1784,6 +1784,12 @@ fn rebuild_bank_from_snapshots(
             .deserialize_from(stream)?;
         Ok(slot_deltas)
     })?;
+
+    if let Some(halt_at_slot) = halt_at_slot {
+        slot_deltas = slot_deltas.into_iter().filter(|(slot, _, _)| {
+            slot <= &halt_at_slot
+        }).collect();
+    }
 
     verify_slot_deltas(slot_deltas.as_slice(), &bank)?;
 
