@@ -541,7 +541,7 @@ where
             bank_fields.slot
         }
     };
-    let bank_rc = BankRc::new(Accounts::new_empty(accounts_db), slot);
+    let bank_rc = BankRc::new(Accounts::new_empty(accounts_db), bank_fields.slot);
     let runtime_config = Arc::new(runtime_config.clone());
 
     // if limit_load_slot_count_from_snapshot is set, then we need to side-step some correctness checks beneath this call
@@ -743,13 +743,13 @@ where
         mut snapshot_historical_roots,
         mut snapshot_historical_roots_with_hash,
     ) = snapshot_accounts_db_fields.collapse_into()?;
-    if let Some(halt_at_slot) = halt_at_slot {
-        snapshot_slot = halt_at_slot;
-        snapshot_storages.retain(|slot, _| { slot <= &halt_at_slot});
-        snapshot_historical_roots.retain(|slot| { slot <= &halt_at_slot });
-        snapshot_historical_roots_with_hash.retain(|(slot, _)| { slot <= &halt_at_slot} );
-        // TODO: fix snapshot_bank_hash_info
-    }
+    // if let Some(halt_at_slot) = halt_at_slot {
+    //     snapshot_slot = halt_at_slot;
+    //     snapshot_storages.retain(|slot, _| { slot <= &halt_at_slot});
+    //     snapshot_historical_roots.retain(|slot| { slot <= &halt_at_slot });
+    //     snapshot_historical_roots_with_hash.retain(|(slot, _)| { slot <= &halt_at_slot} );
+    //     // TODO: fix snapshot_bank_hash_info
+    // }
 
     let snapshot_storages = snapshot_storages.into_iter().collect::<Vec<_>>();
 
@@ -782,15 +782,15 @@ where
         &num_collisions
     )?);
 
-    if let Some(halt_at_slot) = halt_at_slot {
-        info!("Storage size before shrinking to halt_to_slot: {}", storage.len());
-        storage.retain(|slot, _| slot <= &halt_at_slot);
-        assert!(
-            !storage.is_empty(),
-            "Dropped all slots from this stream/snapshot"
-        );
-        info!("Storage size after shrinking to halt_to_slot: {}", storage.len());
-    }
+    // if let Some(halt_at_slot) = halt_at_slot {
+    //     info!("Storage size before shrinking to halt_to_slot: {}", storage.len());
+    //     storage.retain(|slot, _| slot <= &halt_at_slot);
+    //     assert!(
+    //         !storage.is_empty(),
+    //         "Dropped all slots from this stream/snapshot"
+    //     );
+    //     info!("Storage size after shrinking to halt_to_slot: {}", storage.len());
+    // }
 
     // discard any slots with no storage entries
     // this can happen if a non-root slot was serialized
@@ -834,7 +834,8 @@ where
     let handle = Builder::new()
         .name("solNfyAccRestor".to_string())
         .spawn(move || {
-            accounts_db_clone.notify_account_restore_from_snapshot_halt(halt_at_slot);
+            accounts_db_clone.notify_account_restore_from_snapshot();
+            //accounts_db_clone.notify_account_restore_from_snapshot_halt(halt_at_slot);
         })
         .unwrap();
 

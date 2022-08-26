@@ -1785,11 +1785,11 @@ fn rebuild_bank_from_snapshots(
         Ok(slot_deltas)
     })?;
 
-    if let Some(halt_at_slot) = halt_at_slot {
-        slot_deltas = slot_deltas.into_iter().filter(|(slot, _, _)| {
-            slot <= &halt_at_slot
-        }).collect();
-    }
+    // if let Some(halt_at_slot) = halt_at_slot {
+    //     slot_deltas = slot_deltas.into_iter().filter(|(slot, _, _)| {
+    //         slot <= &halt_at_slot
+    //     }).collect();
+    // }
 
     verify_slot_deltas(slot_deltas.as_slice(), &bank)?;
 

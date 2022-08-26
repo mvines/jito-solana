@@ -1401,12 +1401,13 @@ fn load_frozen_forks(
 
     let halt_at_slot = opts.halt_at_slot.unwrap_or(std::u64::MAX);
     let on_halt_store_hash_raw_data_for_debug = opts.on_halt_store_hash_raw_data_for_debug;
+    // 0xspl.iff: is the bug just that we can skip the halted slot?? >= ???
     if bank_forks.read().unwrap().root() != halt_at_slot {
         while !pending_slots.is_empty() {
             timing.details.per_program_timings.clear();
             let (meta, bank, last_entry_hash) = pending_slots.pop().unwrap();
             let slot = bank.slot();
-            if last_status_report.elapsed() > Duration::from_secs(2) {
+            //if last_status_report.elapsed() > Duration::from_secs(2) {
                 let secs = last_status_report.elapsed().as_secs() as f32;
                 last_status_report = Instant::now();
                 info!(
@@ -1419,7 +1420,7 @@ fn load_frozen_forks(
                 );
                 slots_elapsed = 0;
                 txs = 0;
-            }
+            //}
 
             let mut progress = ConfirmationProgress::new(last_entry_hash);
 
