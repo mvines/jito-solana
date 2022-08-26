@@ -725,13 +725,18 @@ where
     );
 
     let AccountsDbFields(
-        snapshot_storages,
+        mut snapshot_storages,
         snapshot_version,
         mut snapshot_slot,
         snapshot_bank_hash_info,
-        snapshot_historical_roots,
-        snapshot_historical_roots_with_hash,
+        mut snapshot_historical_roots,
+        mut snapshot_historical_roots_with_hash,
     ) = snapshot_accounts_db_fields.collapse_into()?;
+    if let Some(halt_at_slot) = halt_at_slot {
+        snapshot_storages.retain(|slot, _| { slot <= &halt_at_slot});
+        snapshot_historical_roots.retain(|slot| { slot <= &halt_at_slot });
+        snapshot_historical_roots_with_hash.retain(|(slot, _)| { slot <= &halt_at_slot} );
+    }
 
     let snapshot_storages = snapshot_storages.into_iter().collect::<Vec<_>>();
 
@@ -745,7 +750,6 @@ where
         &accounts_db,
         snapshot_historical_roots,
         snapshot_historical_roots_with_hash,
-        halt_at_slot,
     );
 
     // Remap the deserialized AppendVec paths to point to correct local paths
@@ -860,7 +864,6 @@ fn reconstruct_historical_roots(
     accounts_db: &AccountsDb,
     mut snapshot_historical_roots: Vec<Slot>,
     snapshot_historical_roots_with_hash: Vec<(Slot, Hash)>,
-    halt_at_slot: Option<Slot>,
 ) {
     // inflate 'historical_roots'
     // inserting into 'historical_roots' needs to be in order
@@ -874,8 +877,6 @@ fn reconstruct_historical_roots(
     snapshot_historical_roots.sort_unstable();
     let mut roots_tracker = accounts_db.accounts_index.roots_tracker.write().unwrap();
     snapshot_historical_roots.into_iter().for_each(|root| {
-        if halt_at_slot.is_none() || halt_at_slot.unwrap() >= root {
-            roots_tracker.historical_roots.insert(root);
-        }
+        roots_tracker.historical_roots.insert(root);
     });
 }
