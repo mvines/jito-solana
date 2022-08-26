@@ -59,6 +59,29 @@ impl AccountsDb {
         notify_stats.report();
     }
 
+    pub fn notify_account_restore_from_snapshot_halt(&self, halt_at_slot: Option<Slot>) {
+        if self.accounts_update_notifier.is_none() {
+            return;
+        }
+
+        let mut slots = self.storage.all_slots();
+        let mut notified_accounts: HashSet<Pubkey> = HashSet::default();
+        let mut notify_stats = GeyserPluginNotifyAtSnapshotRestoreStats::default();
+
+        slots.sort_by(|a, b| b.cmp(a));
+        if let Some(halt_at_slot) = halt_at_slot {
+            slots.retain(|slot| slot <= &halt_at_slot);
+        }
+        for slot in slots {
+            self.notify_accounts_in_slot(slot, &mut notified_accounts, &mut notify_stats);
+        }
+
+        let accounts_update_notifier = self.accounts_update_notifier.as_ref().unwrap();
+        let notifier = &accounts_update_notifier.read().unwrap();
+        notifier.notify_end_of_restore_from_snapshot();
+        notify_stats.report();
+    }
+
     pub fn notify_account_at_accounts_update(
         &self,
         slot: Slot,

@@ -726,7 +726,7 @@ where
     let AccountsDbFields(
         snapshot_storages,
         snapshot_version,
-        snapshot_slot,
+        mut snapshot_slot,
         snapshot_bank_hash_info,
         snapshot_historical_roots,
         snapshot_historical_roots_with_hash,
@@ -765,6 +765,7 @@ where
             "Dropped all slots from this stream/snapshot"
         );
         info!("Storage size after shrinking to halt_to_slot: {}", storage.len());
+        snapshot_slot = halt_at_slot;
     }
 
     // discard any slots with no storage entries
@@ -789,7 +790,7 @@ where
         .bank_hashes
         .write()
         .unwrap()
-        .insert(snapshot_slot, snapshot_bank_hash_info);
+        .insert(snapshot_slot, snapshot_bank_hash_info); // TODO: these are wrong
     accounts_db.storage.map.extend(
         storage
             .into_iter()
@@ -809,7 +810,7 @@ where
     let handle = Builder::new()
         .name("solNfyAccRestor".to_string())
         .spawn(move || {
-            accounts_db_clone.notify_account_restore_from_snapshot();
+            accounts_db_clone.notify_account_restore_from_snapshot_halt(halt_at_slot);
         })
         .unwrap();
 
