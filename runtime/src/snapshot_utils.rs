@@ -1026,18 +1026,20 @@ pub fn bank_from_latest_snapshot_archives(
     verify_index: bool,
     accounts_db_config: Option<AccountsDbConfig>,
     accounts_update_notifier: Option<AccountsUpdateNotifier>,
+    halt_at_slot: Option<Slot>,
 ) -> Result<(
     Bank,
     FullSnapshotArchiveInfo,
     Option<IncrementalSnapshotArchiveInfo>,
 )> {
     let full_snapshot_archive_info =
-        get_highest_full_snapshot_archive_info(&full_snapshot_archives_dir)
+        get_highest_full_snapshot_archive_info(&full_snapshot_archives_dir, halt_at_slot)
             .ok_or(SnapshotError::NoSnapshotArchives)?;
 
     let incremental_snapshot_archive_info = get_highest_incremental_snapshot_archive_info(
         &incremental_snapshot_archives_dir,
         full_snapshot_archive_info.slot(),
+        halt_at_slot,
     );
 
     info!(
@@ -1416,9 +1418,13 @@ pub fn get_highest_incremental_snapshot_archive_slot(
 /// Get the path (and metadata) for the full snapshot archive with the highest slot in a directory
 pub fn get_highest_full_snapshot_archive_info(
     full_snapshot_archives_dir: impl AsRef<Path>,
+    halt_at_slot: Option<Slot>,
 ) -> Option<FullSnapshotArchiveInfo> {
     let mut full_snapshot_archives = get_full_snapshot_archives(full_snapshot_archives_dir);
     full_snapshot_archives.sort_unstable();
+    if let Some(halt_at_slot) = halt_at_slot {
+        full_snapshot_archives.retain(| archive | archive.snapshot_archive_info().slot <= halt_at_slot);
+    }
     full_snapshot_archives.into_iter().rev().next()
 }
 
@@ -1427,6 +1433,7 @@ pub fn get_highest_full_snapshot_archive_info(
 pub fn get_highest_incremental_snapshot_archive_info(
     incremental_snapshot_archives_dir: impl AsRef<Path>,
     full_snapshot_slot: Slot,
+    halt_at_slot: Option<Slot>,
 ) -> Option<IncrementalSnapshotArchiveInfo> {
     // Since we want to filter down to only the incremental snapshot archives that have the same
     // full snapshot slot as the value passed in, perform the filtering before sorting to avoid
@@ -1439,6 +1446,9 @@ pub fn get_highest_incremental_snapshot_archive_info(
             })
             .collect::<Vec<_>>();
     incremental_snapshot_archives.sort_unstable();
+    if let Some(halt_at_slot) = halt_at_slot {
+        incremental_snapshot_archives.retain(|archive| { archive.slot() <= halt_at_slot });
+    }
     incremental_snapshot_archives.into_iter().rev().next()
 }
 
