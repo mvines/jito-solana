@@ -8508,7 +8508,6 @@ impl AccountsDb {
                         let accounts_map = self.process_storage_slot(&storage_maps);
                         scan_time.stop();
                         scan_time_sum += scan_time.as_us();
-                        info!("updating info for {}", slot);
                         Self::update_storage_info(
                             &storage_info,
                             &accounts_map,

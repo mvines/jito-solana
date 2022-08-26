@@ -687,7 +687,6 @@ where
     snapshot_storages
         .into_par_iter()
         .map(|(slot, slot_storage)| {
-            info!("reconstructing: {}", slot);
             Ok((
                 *slot,
                 remap_and_reconstruct_slot_storage(
