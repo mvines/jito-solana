@@ -687,6 +687,7 @@ where
     snapshot_storages
         .into_par_iter()
         .map(|(slot, slot_storage)| {
+            info!("reconstructing: {}", slot);
             Ok((
                 *slot,
                 remap_and_reconstruct_slot_storage(
@@ -744,9 +745,11 @@ where
         mut snapshot_historical_roots_with_hash,
     ) = snapshot_accounts_db_fields.collapse_into()?;
     if let Some(halt_at_slot) = halt_at_slot {
+        snapshot_slot = halt_at_slot;
         snapshot_storages.retain(|slot, _| { slot <= &halt_at_slot});
         snapshot_historical_roots.retain(|slot| { slot <= &halt_at_slot });
         snapshot_historical_roots_with_hash.retain(|(slot, _)| { slot <= &halt_at_slot} );
+        // TODO: fix snapshot_bank_hash_info
     }
 
     let snapshot_storages = snapshot_storages.into_iter().collect::<Vec<_>>();
@@ -762,6 +765,13 @@ where
         snapshot_historical_roots,
         snapshot_historical_roots_with_hash,
     );
+    if let Some(halt_at_slot) = halt_at_slot {
+        if accounts_db.bank_hashes.read().unwrap().contains_key(&halt_at_slot) {
+            error!("after reconstruct we have higher slots!!!");
+        } else {
+            info!("after reconstruct slots are good!");
+        }
+    }
 
     // Remap the deserialized AppendVec paths to point to correct local paths
     let num_collisions = AtomicUsize::new(0);
@@ -781,7 +791,6 @@ where
             "Dropped all slots from this stream/snapshot"
         );
         info!("Storage size after shrinking to halt_to_slot: {}", storage.len());
-        snapshot_slot = halt_at_slot;
     }
 
     // discard any slots with no storage entries

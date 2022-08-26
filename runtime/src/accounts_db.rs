@@ -8446,6 +8446,7 @@ impl AccountsDb {
         let mut slots = self.storage.all_slots();
         #[allow(clippy::stable_sort_primitive)]
         slots.sort();
+        warn!("generating index up to slot: {}", slots.last().cloned().unwrap_or_default());
         if let Some(limit) = limit_load_slot_count_from_snapshot {
             slots.truncate(limit); // get rid of the newer slots and keep just the older
         }
@@ -8507,6 +8508,7 @@ impl AccountsDb {
                         let accounts_map = self.process_storage_slot(&storage_maps);
                         scan_time.stop();
                         scan_time_sum += scan_time.as_us();
+                        info!("updating info for {}", slot);
                         Self::update_storage_info(
                             &storage_info,
                             &accounts_map,
