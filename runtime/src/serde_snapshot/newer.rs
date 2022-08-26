@@ -310,6 +310,7 @@ impl<'a> TypeContext<'a> for Context {
     {
         let mut bank_fields: BankFieldsToDeserialize =
             deserialize_from::<_, DeserializableVersionedBank>(&mut stream)?.into();
+        info!("deserialized bank fields for slot: {}", bank_fields.slot);
         let accounts_db_fields = Self::deserialize_accounts_db_fields(stream)?;
         // Process extra fields
         let lamports_per_signature = ignore_eof_error(deserialize_from(&mut stream))?;
