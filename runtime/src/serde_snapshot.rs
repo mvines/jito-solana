@@ -271,6 +271,7 @@ pub(crate) fn fields_from_streams<R: Read>(
             (None, None)
         };
 
+    // 0xspl.iff: might need to trim these?
     let snapshot_accounts_db_fields = SnapshotAccountsDbFields {
         full_snapshot_accounts_db_fields,
         incremental_snapshot_accounts_db_fields,
@@ -530,7 +531,14 @@ where
         halt_at_slot,
     )?;
 
-    let bank_rc = BankRc::new(Accounts::new_empty(accounts_db), bank_fields.slot);
+    let slot = {
+        if let Some(halt_at_slot) = halt_at_slot {
+            halt_at_slot
+        } else {
+            bank_fields.slot
+        }
+    };
+    let bank_rc = BankRc::new(Accounts::new_empty(accounts_db), slot);
     let runtime_config = Arc::new(runtime_config.clone());
 
     // if limit_load_slot_count_from_snapshot is set, then we need to side-step some correctness checks beneath this call
