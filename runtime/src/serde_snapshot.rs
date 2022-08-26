@@ -298,6 +298,7 @@ pub(crate) fn bank_from_streams<R>(
     verify_index: bool,
     accounts_db_config: Option<AccountsDbConfig>,
     accounts_update_notifier: Option<AccountsUpdateNotifier>,
+    halt_at_slot: Option<Slot>,
 ) -> std::result::Result<Bank, Error>
 where
     R: Read,
@@ -319,6 +320,7 @@ where
         verify_index,
         accounts_db_config,
         accounts_update_notifier,
+        halt_at_slot,
     )
 }
 
@@ -508,6 +510,7 @@ fn reconstruct_bank_from_fields<E>(
     verify_index: bool,
     accounts_db_config: Option<AccountsDbConfig>,
     accounts_update_notifier: Option<AccountsUpdateNotifier>,
+    halt_at_slot: Option<Slot>,
 ) -> Result<Bank, Error>
 where
     E: SerializableStorage + std::marker::Sync,
@@ -524,6 +527,7 @@ where
         verify_index,
         accounts_db_config,
         accounts_update_notifier,
+        halt_at_slot,
     )?;
 
     let bank_rc = BankRc::new(Accounts::new_empty(accounts_db), bank_fields.slot);
@@ -704,6 +708,7 @@ fn reconstruct_accountsdb_from_fields<E>(
     verify_index: bool,
     accounts_db_config: Option<AccountsDbConfig>,
     accounts_update_notifier: Option<AccountsUpdateNotifier>,
+    halt_at_slot: Option<Slot>,
 ) -> Result<(AccountsDb, ReconstructedAccountsDbInfo), Error>
 where
     E: SerializableStorage + std::marker::Sync,
@@ -750,6 +755,17 @@ where
         &next_append_vec_id,
         &num_collisions
     )?);
+
+    // 0xspl.iff: this might be a good spot to drop by slot comparison
+    if let Some(halt_at_slot) = halt_at_slot {
+        info!("Storage size before shrinking to halt_to_slot: {}", storage.len());
+        storage.retain(|slot, _| slot <= &halt_at_slot);
+        assert!(
+            !storage.is_empty(),
+            "Dropped all slots from this stream/snapshot"
+        );
+        info!("Storage size after shrinking to halt_to_slot: {}", storage.len());
+    }
 
     // discard any slots with no storage entries
     // this can happen if a non-root slot was serialized

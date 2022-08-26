@@ -25,6 +25,7 @@ use {
         sync::{Arc, RwLock},
     },
 };
+use solana_sdk::clock::Slot;
 
 pub type LoadResult = result::Result<
     (
@@ -214,6 +215,7 @@ fn bank_forks_from_snapshot(
             process_options.verify_index,
             process_options.accounts_db_config.clone(),
             accounts_update_notifier,
+            process_options.halt_at_slot,
         )
         .expect("Load from snapshot failed");
 

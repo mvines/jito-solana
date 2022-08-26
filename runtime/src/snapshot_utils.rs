@@ -941,6 +941,7 @@ pub fn bank_from_snapshot_archives(
     verify_index: bool,
     accounts_db_config: Option<AccountsDbConfig>,
     accounts_update_notifier: Option<AccountsUpdateNotifier>,
+    halt_at_slot: Option<Slot>,
 ) -> Result<(Bank, BankFromArchiveTimings)> {
     let (unarchived_full_snapshot, mut unarchived_incremental_snapshot) =
         verify_and_unarchive_snapshots(
@@ -978,6 +979,7 @@ pub fn bank_from_snapshot_archives(
         verify_index,
         accounts_db_config,
         accounts_update_notifier,
+        halt_at_slot,
     )?;
     measure_rebuild.stop();
     info!("{}", measure_rebuild);
@@ -1026,6 +1028,7 @@ pub fn bank_from_latest_snapshot_archives(
     verify_index: bool,
     accounts_db_config: Option<AccountsDbConfig>,
     accounts_update_notifier: Option<AccountsUpdateNotifier>,
+    halt_at_slot: Option<Slot>,
 ) -> Result<(
     Bank,
     FullSnapshotArchiveInfo,
@@ -1070,6 +1073,7 @@ pub fn bank_from_latest_snapshot_archives(
         verify_index,
         accounts_db_config,
         accounts_update_notifier,
+        halt_at_slot,
     )?;
 
     datapoint_info!(
@@ -1096,6 +1100,8 @@ pub fn bank_from_latest_snapshot_archives(
         ),
     );
 
+    // 0xspl.iff: probably need to bypass this
+    // or add
     verify_bank_against_expected_slot_hash(
         &bank,
         incremental_snapshot_archive_info.as_ref().map_or(
@@ -1690,6 +1696,7 @@ fn rebuild_bank_from_snapshots(
     verify_index: bool,
     accounts_db_config: Option<AccountsDbConfig>,
     accounts_update_notifier: Option<AccountsUpdateNotifier>,
+    halt_at_slot: Option<Slot>,
 ) -> Result<Bank> {
     let (full_snapshot_version, full_snapshot_root_paths) =
         verify_unpacked_snapshots_dir_and_version(
@@ -1720,6 +1727,10 @@ fn rebuild_bank_from_snapshots(
             .map(|root_paths| root_paths.snapshot_path),
     };
 
+    // 0xspl.iff: this is the first opportunity to limit bank creation to a given slot
+    // there is no reason to limit loading snapshots above, theres a high chance our
+    // given slot falls in the snapshot range anyways
+
     let bank = deserialize_snapshot_data_files(&snapshot_root_paths, |snapshot_streams| {
         Ok(
             match incremental_snapshot_version.unwrap_or(full_snapshot_version) {
@@ -1739,6 +1750,7 @@ fn rebuild_bank_from_snapshots(
                     verify_index,
                     accounts_db_config,
                     accounts_update_notifier,
+                    halt_at_slot,
                 ),
             }?,
         )
@@ -3240,6 +3252,7 @@ mod tests {
             false,
             Some(ACCOUNTS_DB_CONFIG_FOR_TESTING),
             None,
+            None,
         )
         .unwrap();
 
@@ -3351,6 +3364,7 @@ mod tests {
             false,
             false,
             Some(ACCOUNTS_DB_CONFIG_FOR_TESTING),
+            None,
             None,
         )
         .unwrap();
@@ -3484,6 +3498,7 @@ mod tests {
             false,
             Some(ACCOUNTS_DB_CONFIG_FOR_TESTING),
             None,
+            None,
         )
         .unwrap();
 
@@ -3605,6 +3620,7 @@ mod tests {
             false,
             false,
             Some(ACCOUNTS_DB_CONFIG_FOR_TESTING),
+            None,
             None,
         )
         .unwrap();
@@ -3746,6 +3762,7 @@ mod tests {
             false,
             Some(ACCOUNTS_DB_CONFIG_FOR_TESTING),
             None,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -3809,6 +3826,7 @@ mod tests {
             false,
             false,
             Some(ACCOUNTS_DB_CONFIG_FOR_TESTING),
+            None,
             None,
         )
         .unwrap();
