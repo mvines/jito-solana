@@ -8,8 +8,9 @@ use {
         replayer::{ReplayRequest, ReplayResponse, Replayer, ReplayerHandle},
     },
     chrono_humanize::{Accuracy, HumanTime, Tense},
-    crossbeam_channel::{unbounded, Sender},
+    crossbeam_channel::{unbounded, Receiver, Select, Sender},
     itertools::Itertools,
+    libc::select,
     log::*,
     rayon::{
         iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator},
@@ -169,90 +170,144 @@ fn execute_batches(
     replayer_handle: &ReplayerHandle,
 ) -> Result<()> {
     let now = Instant::now();
+
     let tx_account_locks_results: Vec<Result<_>> = transactions
         .iter()
         .map(|tx| tx.get_account_locks(&bank.feature_set))
         .collect();
+
     let now = Instant::now();
     let dependency_graph = build_dependency_graphs(&tx_account_locks_results)?;
     let dependency_graph_elapsed = now.elapsed();
-    let now = Instant::now();
-    let batches_indices = build_batch_indices(&dependency_graph);
-    let batches_indices_elapsed = now.elapsed();
-    let batches: Vec<_> = batches_indices.iter().map(|b| b.len()).collect();
+
     info!(
-        "slot: {:?} dependency_graph_elapsed: {:?} batches_indices_elapsed: {:?} batches: {:?}",
+        "slot: {:?} dependency_graph_elapsed: {:?}",
         bank.slot(),
         dependency_graph_elapsed,
-        batches_indices_elapsed,
-        batches
     );
     timings.planning_elapsed += now.elapsed().as_micros() as u64;
 
-    for batch_indices in batches_indices {
-        let sanitized_txs: Vec<SanitizedTransaction> = batch_indices
-            .iter()
-            .map(|i| transactions.get(*i).unwrap().clone())
-            .collect();
-        let batches = vec![bank.prepare_sanitized_batch(&sanitized_txs)];
+    #[derive(Clone)]
+    struct ProcessingState {
+        receiver: Receiver<ReplayResponse>,
+        select_index: Option<usize>,
+    };
 
-        let (lock_results, sanitized_txs): (Vec<_>, Vec<_>) = batches
-            .iter()
-            .flat_map(|batch| {
-                batch
-                    .lock_results()
-                    .iter()
-                    .cloned()
-                    .zip(batch.sanitized_transactions().to_vec())
-            })
-            .unzip();
+    #[derive(Clone)]
+    enum State {
+        Blocked,
+        Processing(ProcessingState),
+        Done,
+    };
 
-        if let Some(r) = lock_results.iter().find(|r| r.is_err()) {
-            info!("lock error: {:?}", r);
-            r.clone()?;
-        }
+    let mut processing_states: Vec<State> = vec![State::Blocked; dependency_graph.len()];
 
-        let responses: Vec<_> = sanitized_txs
-            .into_iter()
-            .map(|tx| {
-                replayer_handle.send(ReplayRequest {
-                    bank: bank.clone(),
-                    tx,
-                    transaction_status_sender: transaction_status_sender.cloned(),
-                    replay_vote_sender: replay_vote_sender.cloned(),
-                    cost_capacity_meter: cost_capacity_meter.clone(),
-                    entry_callback: entry_callback.cloned(),
+    let mut receivers = Vec::new();
+    {
+        let mut sel = Select::new();
+        while !processing_states.iter().all(|p| matches!(p, State::Done)) {
+            let indices_receivers: Vec<_> = processing_states
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, state)| {
+                    match state {
+                        State::Blocked => {
+                            if dependency_graph[idx]
+                                .iter()
+                                .all(|idx| matches!(processing_states[*idx], State::Done))
+                            {
+                                // schedule
+                                let receiver = replayer_handle
+                                    .send(ReplayRequest {
+                                        bank: bank.clone(),
+                                        tx: transactions.get(idx).unwrap().clone(),
+                                        transaction_status_sender: transaction_status_sender
+                                            .cloned(),
+                                        replay_vote_sender: replay_vote_sender.cloned(),
+                                        cost_capacity_meter: cost_capacity_meter.clone(),
+                                        entry_callback: entry_callback.cloned(),
+                                    })
+                                    .unwrap();
+                                Some((idx, receiver))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
                 })
-            })
-            .collect();
-
-        let mut results = vec![];
-        let mut new_timings = vec![];
-        for r in responses {
-            match r {
-                Ok(receiver) => match receiver.recv() {
-                    Ok(ReplayResponse { result, timings }) => {
-                        results.push(result);
-                        new_timings.push(timings);
-                    }
-                    Err(_) => {
-                        error!("ReplayResponse recv error");
-                    }
-                },
-                Err(e) => {
-                    error!("error yooooo!!! error: {:?}", e);
-                }
+                .collect();
+            for (idx, receiver) in indices_receivers {
+                receivers.push(receiver);
+                let select_index = sel.recv(&receivers.get(receivers.len() - 1).unwrap());
             }
         }
-
-        // timings.saturating_add_in_place(ExecuteTimingType::TotalBatchesLen, batches.len() as u64);
-        // timings.saturating_add_in_place(ExecuteTimingType::NumExecuteBatches, 1);
-        for timing in new_timings {
-            timings.accumulate(&timing);
-        }
-
-        first_err(&results)?;
     }
+
+    // for batch_indices in batches_indices {
+    //     let sanitized_txs: Vec<SanitizedTransaction> = batch_indices
+    //         .iter()
+    //         .map(|i| transactions.get(*i).unwrap().clone())
+    //         .collect();
+    //     let batches = vec![bank.prepare_sanitized_batch(&sanitized_txs)];
+    //
+    //     let (lock_results, sanitized_txs): (Vec<_>, Vec<_>) = batches
+    //         .iter()
+    //         .flat_map(|batch| {
+    //             batch
+    //                 .lock_results()
+    //                 .iter()
+    //                 .cloned()
+    //                 .zip(batch.sanitized_transactions().to_vec())
+    //         })
+    //         .unzip();
+    //
+    //     if let Some(r) = lock_results.iter().find(|r| r.is_err()) {
+    //         info!("lock error: {:?}", r);
+    //         r.clone()?;
+    //     }
+    //
+    //     let responses: Vec<_> = sanitized_txs
+    //         .into_iter()
+    //         .map(|tx| {
+    //             replayer_handle.send(ReplayRequest {
+    //                 bank: bank.clone(),
+    //                 tx,
+    //                 transaction_status_sender: transaction_status_sender.cloned(),
+    //                 replay_vote_sender: replay_vote_sender.cloned(),
+    //                 cost_capacity_meter: cost_capacity_meter.clone(),
+    //                 entry_callback: entry_callback.cloned(),
+    //             })
+    //         })
+    //         .collect();
+    //
+    //     let mut results = vec![];
+    //     let mut new_timings = vec![];
+    //     for r in responses {
+    //         match r {
+    //             Ok(receiver) => match receiver.recv() {
+    //                 Ok(ReplayResponse { result, timings }) => {
+    //                     results.push(result);
+    //                     new_timings.push(timings);
+    //                 }
+    //                 Err(_) => {
+    //                     error!("ReplayResponse recv error");
+    //                 }
+    //             },
+    //             Err(e) => {
+    //                 error!("error yooooo!!! error: {:?}", e);
+    //             }
+    //         }
+    //     }
+    //
+    //     // timings.saturating_add_in_place(ExecuteTimingType::TotalBatchesLen, batches.len() as u64);
+    //     // timings.saturating_add_in_place(ExecuteTimingType::NumExecuteBatches, 1);
+    //     for timing in new_timings {
+    //         timings.accumulate(&timing);
+    //     }
+    //
+    //     first_err(&results)?;
+    // }
 
     Ok(())
 }
