@@ -207,6 +207,51 @@ impl TipManager {
         Ok(Config::try_deserialize(&mut config_data.data())?)
     }
 
+    // Used by initialization script
+    pub fn initialize_tip_payment_program_unsanitized_tx(
+        &self,
+        recent_blockhash: Hash,
+        keypair: &Keypair,
+    ) -> Transaction {
+        let init_ix = Instruction {
+            program_id: self.tip_payment_program_info.program_id,
+            data: tip_payment::instruction::Initialize {
+                _bumps: InitBumps {
+                    config: self.tip_payment_program_info.config_pda_bump.1,
+                    tip_payment_account_0: self.tip_payment_program_info.tip_pda_0.1,
+                    tip_payment_account_1: self.tip_payment_program_info.tip_pda_1.1,
+                    tip_payment_account_2: self.tip_payment_program_info.tip_pda_2.1,
+                    tip_payment_account_3: self.tip_payment_program_info.tip_pda_3.1,
+                    tip_payment_account_4: self.tip_payment_program_info.tip_pda_4.1,
+                    tip_payment_account_5: self.tip_payment_program_info.tip_pda_5.1,
+                    tip_payment_account_6: self.tip_payment_program_info.tip_pda_6.1,
+                    tip_payment_account_7: self.tip_payment_program_info.tip_pda_7.1,
+                },
+            }
+                .data(),
+            accounts: tip_payment::accounts::Initialize {
+                config: self.tip_payment_program_info.config_pda_bump.0,
+                tip_payment_account_0: self.tip_payment_program_info.tip_pda_0.0,
+                tip_payment_account_1: self.tip_payment_program_info.tip_pda_1.0,
+                tip_payment_account_2: self.tip_payment_program_info.tip_pda_2.0,
+                tip_payment_account_3: self.tip_payment_program_info.tip_pda_3.0,
+                tip_payment_account_4: self.tip_payment_program_info.tip_pda_4.0,
+                tip_payment_account_5: self.tip_payment_program_info.tip_pda_5.0,
+                tip_payment_account_6: self.tip_payment_program_info.tip_pda_6.0,
+                tip_payment_account_7: self.tip_payment_program_info.tip_pda_7.0,
+                system_program: system_program::id(),
+                payer: keypair.pubkey(),
+            }
+                .to_account_metas(None),
+        };
+        Transaction::new_signed_with_payer(
+            &[init_ix],
+            Some(&keypair.pubkey()),
+            &[keypair],
+            recent_blockhash,
+        )
+    }
+
     /// Only called once during contract creation.
     pub fn initialize_tip_payment_program_tx(
         &self,
@@ -296,6 +341,36 @@ impl TipManager {
             // Since anyone can derive the PDA and send it lamports we must also check the owner is the program.
             Some(account) => account.owner() != &self.tip_distribution_program_info.program_id,
         }
+    }
+
+    /// Creates an [Initialize] transaction object.
+    pub fn initialize_tip_distribution_config_unsanitized_tx(
+        &self,
+        recent_blockhash: Hash,
+        my_keypair: &Keypair,
+    ) -> Transaction {
+        let ix = initialize_ix(
+            self.tip_distribution_program_info.program_id,
+            InitializeArgs {
+                authority: my_keypair.pubkey(),
+                expired_funds_account: my_keypair.pubkey(),
+                num_epochs_valid: 3,
+                max_validator_commission_bps: 1000,
+                bump: self.tip_distribution_program_info.config_pda_and_bump.1,
+            },
+            InitializeAccounts {
+                config: self.tip_distribution_program_info.config_pda_and_bump.0,
+                system_program: system_program::id(),
+                initializer: my_keypair.pubkey(),
+            },
+        );
+
+        Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&my_keypair.pubkey()),
+            &[my_keypair],
+            recent_blockhash,
+        )
     }
 
     /// Creates an [Initialize] transaction object.
