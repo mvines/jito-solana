@@ -92,7 +92,7 @@ fn main() {
         let tip_payment_tx =
             tip_manager.initialize_tip_payment_program_unsanitized_tx(recent_blockhash, &payer_kp);
         info!("sending tip payment initialization tx");
-        runtime.spawn(async move {
+        runtime.block_on(async move {
             if let Err(e) =
                 send_transaction_with_retry(rpc_client, &tip_payment_tx, DELAY, MAX_RETRIES).await
             {
@@ -115,7 +115,7 @@ fn main() {
         let tip_distribution_tx = tip_manager
             .initialize_tip_distribution_config_unsanitized_tx(recent_blockhash, &payer_kp);
         info!("sending tip distribution config tx");
-        runtime.spawn(async move {
+        runtime.block_on(async move {
             if let Err(e) =
                 send_transaction_with_retry(rpc_client, &tip_distribution_tx, DELAY, MAX_RETRIES)
                     .await
