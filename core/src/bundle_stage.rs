@@ -752,48 +752,48 @@ impl BundleStage {
                 Err(BundleExecutionError::PohMaxHeightError)
             } else {
                 let sanitized_bundle = locked_bundle.sanitized_bundle();
-                if Self::bundle_touches_tip_pdas(&sanitized_bundle.transactions, &tip_pdas)
-                    && bank_start.working_bank.slot() != *last_tip_update_slot
-                {
-                    let sanitized_tip_bundle = SanitizedBundle {
-                        transactions: Self::get_tip_transactions(
-                            &bank_start.working_bank,
-                            tip_manager,
-                            cluster_info,
-                        )?,
-                    };
-                    if !sanitized_tip_bundle.transactions.is_empty() {
-                        match bundle_account_locker
-                            .prepare_locked_bundle(&sanitized_tip_bundle, &bank_start.working_bank)
-                        {
-                            Ok(locked_tip_bundle) => {
-                                match Self::update_qos_and_execute_record_commit_bundle(
-                                    &locked_tip_bundle.sanitized_bundle(),
-                                    recorder,
-                                    transaction_status_sender,
-                                    gossip_vote_sender,
-                                    qos_service,
-                                    bank_start,
-                                    execute_and_commit_timings,
-                                    max_bundle_retry_duration,
-                                ) {
-                                    Ok(_) => {
-                                        info!("successfully updated tip receiver");
-                                        *last_tip_update_slot = bank_start.working_bank.slot();
-                                    }
-                                    Err(e) => {
-                                        error!("error executing tip instructions: {:?}", e);
-                                        return Err(e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!("error locking tip transactions: {:?}", e);
-                                return Err(BundleExecutionError::LockError);
-                            }
-                        }
-                    }
-                }
+                // if Self::bundle_touches_tip_pdas(&sanitized_bundle.transactions, &tip_pdas)
+                //     && bank_start.working_bank.slot() != *last_tip_update_slot
+                // {
+                //     let sanitized_tip_bundle = SanitizedBundle {
+                //         transactions: Self::get_tip_transactions(
+                //             &bank_start.working_bank,
+                //             tip_manager,
+                //             cluster_info,
+                //         )?,
+                //     };
+                //     if !sanitized_tip_bundle.transactions.is_empty() {
+                //         match bundle_account_locker
+                //             .prepare_locked_bundle(&sanitized_tip_bundle, &bank_start.working_bank)
+                //         {
+                //             Ok(locked_tip_bundle) => {
+                //                 match Self::update_qos_and_execute_record_commit_bundle(
+                //                     &locked_tip_bundle.sanitized_bundle(),
+                //                     recorder,
+                //                     transaction_status_sender,
+                //                     gossip_vote_sender,
+                //                     qos_service,
+                //                     bank_start,
+                //                     execute_and_commit_timings,
+                //                     max_bundle_retry_duration,
+                //                 ) {
+                //                     Ok(_) => {
+                //                         info!("successfully updated tip receiver");
+                //                         *last_tip_update_slot = bank_start.working_bank.slot();
+                //                     }
+                //                     Err(e) => {
+                //                         error!("error executing tip instructions: {:?}", e);
+                //                         return Err(e);
+                //                     }
+                //                 }
+                //             }
+                //             Err(e) => {
+                //                 error!("error locking tip transactions: {:?}", e);
+                //                 return Err(BundleExecutionError::LockError);
+                //             }
+                //         }
+                //     }
+                // }
                 Self::update_qos_and_execute_record_commit_bundle(
                     sanitized_bundle,
                     recorder,
@@ -831,10 +831,10 @@ impl BundleStage {
         consensus_accounts_cache: &mut HashSet<Pubkey>,
         last_consensus_update: &mut Epoch,
     ) {
-        if bank.epoch() > *last_consensus_update {
-            *consensus_accounts_cache = Self::get_consensus_accounts(bank);
-            *last_consensus_update = bank.epoch();
-        }
+        // if bank.epoch() > *last_consensus_update {
+        //     *consensus_accounts_cache = Self::get_consensus_accounts(bank);
+        //     *last_consensus_update = bank.epoch();
+        // }
     }
 
     #[allow(clippy::too_many_arguments)]
