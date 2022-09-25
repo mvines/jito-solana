@@ -737,7 +737,7 @@ impl BundleStage {
                 ) {
                     Ok(sanitized_bundle) => Some((packet_bundle, sanitized_bundle)),
                     Err(e) => {
-                        debug!(
+                        error!(
                             "failed to sanitize bundle uuid: {:?} error: {:?}",
                             packet_bundle.uuid, e
                         );
@@ -831,8 +831,12 @@ impl BundleStage {
                                 &change_tip_receiver_bundle,
                                 &bank_start.working_bank,
                             )
-                            .map_err(|_| BundleExecutionError::LockError)?;
-                        Self::update_qos_and_execute_record_commit_bundle(
+                            .map_err(|_| {
+                                error!("failed to add change_tip_receiver bundle to locker");
+                                BundleExecutionError::LockError
+                            })?;
+
+                        if let Err(e) = Self::update_qos_and_execute_record_commit_bundle(
                             locked_change_tip_receiver_bundle.sanitized_bundle(),
                             recorder,
                             transaction_status_sender,
@@ -841,7 +845,10 @@ impl BundleStage {
                             bank_start,
                             execute_and_commit_timings,
                             max_bundle_retry_duration,
-                        )?;
+                        ) {
+                            error!("error changing tip receiver {}", e);
+                            return Err(e);
+                        }
                     }
 
                     *last_tip_update_slot = bank_start.working_bank.slot();
@@ -863,14 +870,16 @@ impl BundleStage {
             .into_iter()
             .zip(sanitized_bundles.iter())
             .rev()
-            .for_each(|(bundle_execution_result, (packet_bundle, _))| {
-                if matches!(
-                    bundle_execution_result,
-                    Err(BundleExecutionError::PohMaxHeightError)
-                ) {
-                    unprocessed_bundles.push_front(packet_bundle.clone());
-                }
-            });
+            .for_each(
+                |(bundle_execution_result, (packet_bundle, _))| match bundle_execution_result {
+                    Err(BundleExecutionError::PohMaxHeightError) => {
+                        info!("block full, saving bundle for later");
+                        unprocessed_bundles.push_front(packet_bundle.clone());
+                    }
+                    Err(e) => warn!("failed to execute bundle {}", e),
+                    Ok(_) => info!("bundle successfully executed"),
+                },
+            );
 
         Ok(())
     }
