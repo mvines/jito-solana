@@ -30,7 +30,7 @@ use {
         genesis_config::GenesisConfig,
         hash::Hash,
         message::Message,
-        pubkey::{self},
+        pubkey,
         signature::{Keypair, Signature, Signer},
         system_instruction, system_transaction,
         timing::{duration_as_us, timestamp},
@@ -95,9 +95,6 @@ fn bench_consume_buffered(bencher: &mut Bencher) {
         let mut transaction_buffer =
             UnprocessedPacketBatches::from_iter(batches.into_iter(), 2 * batches_len);
         let (s, _r) = unbounded();
-
-        let bundle_locker = BundleAccountLocker::default();
-
         // This tests the performance of buffering packets.
         // If the packet buffers are copied, performance will be poor.
         bencher.iter(move || {
@@ -116,7 +113,7 @@ fn bench_consume_buffered(bencher: &mut Bencher) {
                 10,
                 None,
                 &HashSet::default(),
-                &bundle_locker,
+                &BundleAccountLocker::default(),
             );
         });
 
@@ -289,7 +286,6 @@ fn bench_banking(bencher: &mut Bencher, tx_type: TransactionType) {
         );
         let cluster_info = Arc::new(cluster_info);
         let (s, _r) = unbounded();
-        let bundle_locker = BundleAccountLocker::default();
         let _banking_stage = BankingStage::new(
             &cluster_info,
             &poh_recorder,
@@ -303,7 +299,7 @@ fn bench_banking(bencher: &mut Bencher, tx_type: TransactionType) {
             Arc::new(ConnectionCache::default()),
             bank_forks,
             HashSet::new(),
-            bundle_locker,
+            BundleAccountLocker::default(),
         );
         poh_recorder.write().unwrap().set_bank(&bank, false);
 

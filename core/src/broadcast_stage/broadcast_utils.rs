@@ -100,10 +100,11 @@ pub(super) fn recv_slot_entries(receiver: &Receiver<WorkingBankEntry>) -> Result
     }
     let time_coalesced = coalesce_start.elapsed();
 
+    let time_elapsed = recv_start.elapsed();
     Ok(ReceiveResults {
         entries,
+        time_elapsed,
         time_coalesced,
-        time_elapsed: recv_start.elapsed(),
         bank,
         last_tick_height,
     })

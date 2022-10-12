@@ -95,7 +95,6 @@ const MIN_TOTAL_THREADS: u32 = NUM_VOTE_PROCESSING_THREADS + MIN_THREADS_BANKING
 pub const UNPROCESSED_BUFFER_STEP_SIZE: usize = 128;
 
 const SLOT_BOUNDARY_CHECK_PERIOD: Duration = Duration::from_millis(10);
-
 pub type BankingPacketBatch = (Vec<PacketBatch>, Option<SigverifyTracerPacketStats>);
 pub type BankingPacketSender = CrossbeamSender<BankingPacketBatch>;
 pub type BankingPacketReceiver = CrossbeamReceiver<BankingPacketBatch>;
@@ -651,9 +650,9 @@ impl BankingStage {
 
                 let packets_to_process_len = packets_to_process.len();
                 if let Some(BankStart {
-                                working_bank,
-                                bank_creation_time,
-                            }) = bank_start
+                    working_bank,
+                    bank_creation_time,
+                }) = bank_start
                 {
                     let (process_transactions_summary, process_packets_transactions_time) =
                         measure!(
@@ -685,9 +684,9 @@ impl BankingStage {
 
                     if reached_max_poh_height
                         || !Bank::should_bank_still_be_processing_txs(
-                        &bank_creation_time,
-                        max_tx_ingestion_ns,
-                    )
+                            &bank_creation_time,
+                            max_tx_ingestion_ns,
+                        )
                     {
                         reached_end_of_slot = true;
                     }
@@ -1664,7 +1663,6 @@ impl BankingStage {
                         let post_balances = bank.collect_balances(batch);
                         let post_token_balances =
                             collect_token_balances(bank, batch, &mut mint_decimals, None);
-
                         let mut transaction_index = starting_transaction_index.unwrap_or_default();
                         let batch_transaction_indexes: Vec<_> = tx_results
                             .execution_results
@@ -1679,7 +1677,6 @@ impl BankingStage {
                                 }
                             })
                             .collect();
-
                         transaction_status_sender.send_transaction_status_batch(
                             bank.clone(),
                             txs,

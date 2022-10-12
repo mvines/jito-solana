@@ -1,6 +1,5 @@
 //! A stage to broadcast data from a leader node to validators
 #![allow(clippy::rc_buffer)]
-
 use {
     self::{
         broadcast_duplicates_run::{BroadcastDuplicatesConfig, BroadcastDuplicatesRun},
