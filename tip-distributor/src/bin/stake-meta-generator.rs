@@ -41,7 +41,7 @@ struct Args {
 
 impl Args {
     fn ledger_path_parser(ledger_path: &str) -> Result<PathBuf, &'static str> {
-        Ok(fs::canonicalize(&ledger_path).unwrap_or_else(|err| {
+        Ok(fs::canonicalize(ledger_path).unwrap_or_else(|err| {
             error!("Unable to access ledger path '{}': {}", ledger_path, err);
             exit(1);
         }))
