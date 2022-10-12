@@ -11,7 +11,7 @@ use {
     },
     solana_rpc_client_api::{
         client_error::Result,
-        custom_error::NodeUnhealthyErrorData,
+        custom_error::{self},
         error_object::RpcErrorObject,
         request::{RpcError, RpcRequest, RpcResponseErrorData},
         response::RpcSimulateTransactionResult,
@@ -73,14 +73,14 @@ impl HttpSender {
         }
     }
 
-    fn check_response(response: &serde_json::Value) -> Result<()> {
-        if response["error"].is_object() {
-            return match serde_json::from_value::<RpcErrorObject>(response["error"].clone()) {
+    fn check_response(json: &serde_json::Value) -> Result<()> {
+        if json["error"].is_object() {
+            return match serde_json::from_value::<RpcErrorObject>(json["error"].clone()) {
                 Ok(rpc_error_object) => {
                     let data = match rpc_error_object.code {
-                        JSON_RPC_SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE => {
+                        custom_error::JSON_RPC_SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE => {
                             match serde_json::from_value::<RpcSimulateTransactionResult>(
-                                response["error"]["data"].clone(),
+                                json["error"]["data"].clone(),
                             ) {
                                 Ok(data) => {
                                     RpcResponseErrorData::SendTransactionPreflightFailure(data)
@@ -94,11 +94,11 @@ impl HttpSender {
                                 }
                             }
                         }
-                        JSON_RPC_SERVER_ERROR_NODE_UNHEALTHY => {
-                            match serde_json::from_value::<NodeUnhealthyErrorData>(
-                                response["error"]["data"].clone(),
+                        custom_error::JSON_RPC_SERVER_ERROR_NODE_UNHEALTHY => {
+                            match serde_json::from_value::<custom_error::NodeUnhealthyErrorData>(
+                                json["error"]["data"].clone(),
                             ) {
-                                Ok(NodeUnhealthyErrorData { num_slots_behind }) => {
+                                Ok(custom_error::NodeUnhealthyErrorData { num_slots_behind }) => {
                                     RpcResponseErrorData::NodeUnhealthy { num_slots_behind }
                                 }
                                 Err(_err) => RpcResponseErrorData::Empty,
@@ -106,8 +106,9 @@ impl HttpSender {
                         }
                         _ => RpcResponseErrorData::Empty,
                     };
+
                     Err(RpcError::RpcResponseError {
-                        request_id: response["id"].as_u64().unwrap(),
+                        request_id: json["id"].as_u64().unwrap(),
                         code: rpc_error_object.code,
                         message: rpc_error_object.message,
                         data,
@@ -116,13 +117,12 @@ impl HttpSender {
                 }
                 Err(err) => Err(RpcError::RpcRequestError(format!(
                     "Failed to deserialize RPC error response: {} [{}]",
-                    serde_json::to_string(&response["error"]).unwrap(),
+                    serde_json::to_string(&json["error"]).unwrap(),
                     err
                 ))
                 .into()),
             };
         }
-
         Ok(())
     }
 
