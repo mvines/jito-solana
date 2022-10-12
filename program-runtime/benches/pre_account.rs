@@ -44,7 +44,7 @@ fn bench_verify_account_changes_data(bencher: &mut Bencher) {
         )
         .unwrap();
     });
-    let summary = bencher.bench(|_bencher| {}).unwrap().unwrap();
+    let summary = bencher.bench(|_bencher| {}).unwrap();
     info!("data no change by owner: {} ns/iter", summary.median);
 
     let pre_data = vec![BUFSIZE];
