@@ -94,6 +94,7 @@ const MIN_THREADS_BANKING: u32 = 1;
 const MIN_TOTAL_THREADS: u32 = NUM_VOTE_PROCESSING_THREADS + MIN_THREADS_BANKING;
 
 const SLOT_BOUNDARY_CHECK_PERIOD: Duration = Duration::from_millis(10);
+
 pub type BankingPacketBatch = (Vec<PacketBatch>, Option<SigverifyTracerPacketStats>);
 pub type BankingPacketSender = CrossbeamSender<BankingPacketBatch>;
 pub type BankingPacketReceiver = CrossbeamReceiver<BankingPacketBatch>;
@@ -718,6 +719,7 @@ impl BankingStage {
                         banking_stage_stats,
                         packet,
                         payload,
+                        blacklisted_accounts,
                     )
                 };
 
@@ -756,8 +758,7 @@ impl BankingStage {
                                 banking_stage_stats,
                                 qos_service,
                                 payload.slot_metrics_tracker,
-                                blacklisted_accounts,
-                                bundle_account_locker
+                                bundle_account_locker,
                             )
                         },
                         (),
@@ -909,6 +910,7 @@ impl BankingStage {
         banking_stage_stats: &BankingStageStats,
         packet: &ImmutableDeserializedPacket,
         payload: &mut ConsumeScannerPayload,
+        blacklisted_accounts: &HashSet<Pubkey>,
     ) -> ProcessingDecision {
         // If end of the slot, return should process (quick loop after reached end of slot)
         if payload.reached_end_of_slot {
@@ -918,15 +920,18 @@ impl BankingStage {
         // Before sanitization, let's quickly check the static keys (performance optimization)
         let message = &packet.transaction().get_message().message;
         let static_keys = message.static_account_keys();
-        for key in static_keys.iter().enumerate().filter_map(|(idx, key)| {
-            if message.is_maybe_writable(idx) {
-                Some(key)
-            } else {
-                None
-            }
-        }) {
-            if payload.write_accounts.contains(key) {
+        for (idx, key) in static_keys.iter().enumerate() {
+            if message.is_maybe_writable(idx) && payload.write_accounts.contains(key) {
                 return ProcessingDecision::Later;
+            }
+
+            // throw away transactions that mention blacklisted accounts
+            if blacklisted_accounts.contains(key) {
+                payload
+                    .buffered_packet_batches
+                    .message_hash_to_transaction
+                    .remove(packet.message_hash());
+                return ProcessingDecision::Never;
             }
         }
 
@@ -2099,7 +2104,6 @@ impl BankingStage {
         banking_stage_stats: &'a BankingStageStats,
         qos_service: &'a QosService,
         slot_metrics_tracker: &'a mut LeaderSlotMetricsTracker,
-        blacklisted_accounts: &HashSet<Pubkey>,
         bundle_account_locker: &BundleAccountLocker,
     ) -> ProcessTransactionsSummary {
         // Process transactions
@@ -2968,7 +2972,7 @@ mod tests {
                 Ok(()),
                 Err(TransactionError::BlockhashNotFound),
                 Ok(()),
-                Ok(())
+                Ok(()),
             ]
         );
 
@@ -3760,6 +3764,7 @@ mod tests {
             (1..transactions_count - 1).collect::<Vec<usize>>()
         );
     }
+
     #[test]
     fn test_process_transactions_account_in_use() {
         solana_logger::setup();
@@ -3780,7 +3785,7 @@ mod tests {
                 &mint_keypair,
                 &Pubkey::new_unique(),
                 1,
-                genesis_config.hash(),
+                genesis_config.hash()
             );
             MAX_NUM_TRANSACTIONS_PER_BATCH
         ];
