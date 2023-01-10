@@ -4,6 +4,7 @@
 [submodule "jito-programs"]
 	path = jito-programs
 	url = https://github.com/jito-foundation/jito-programs.git
+  branch = submodule
 [submodule "jito-protos/protos"]
 	path = jito-protos/protos
 	url = https://github.com/jito-labs/mev-protos.git
