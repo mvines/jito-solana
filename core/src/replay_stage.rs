@@ -1681,23 +1681,37 @@ impl ReplayStage {
         // will break!
 
         // loop over until no more entries to process
-        let start = Instant::now();
-        while start.elapsed() < *max_confirm_slot_processing_time
-            && blockstore_processor::confirm_slot(
-                blockstore,
-                bank,
-                &mut bank_progress.replay_stats,
-                &mut bank_progress.replay_progress,
-                false,
-                transaction_status_sender,
-                Some(replay_vote_sender),
-                transaction_cost_metrics_sender,
-                None,
-                verify_recyclers,
-                false,
-                handle,
-            )?
-        {}
+        // let start = Instant::now();
+        // while start.elapsed() < *max_confirm_slot_processing_time
+        //     && blockstore_processor::confirm_slot(
+        //         blockstore,
+        //         bank,
+        //         &mut bank_progress.replay_stats,
+        //         &mut bank_progress.replay_progress,
+        //         false,
+        //         transaction_status_sender,
+        //         Some(replay_vote_sender),
+        //         transaction_cost_metrics_sender,
+        //         None,
+        //         verify_recyclers,
+        //         false,
+        //         handle,
+        //     )?
+        // {}
+        let _result = blockstore_processor::confirm_slot(
+            blockstore,
+            bank,
+            &mut bank_progress.replay_stats,
+            &mut bank_progress.replay_progress,
+            false,
+            transaction_status_sender,
+            Some(replay_vote_sender),
+            transaction_cost_metrics_sender,
+            None,
+            verify_recyclers,
+            false,
+            handle,
+        )?;
 
         let tx_count_after = bank_progress.replay_progress.num_txs;
         let tx_count = tx_count_after - tx_count_before;
