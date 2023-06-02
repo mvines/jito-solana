@@ -31,6 +31,7 @@ use {
         transaction::{self, AddressLoader, SanitizedTransaction, TransactionError},
     },
     std::{
+        collections::HashSet,
         sync::{atomic::Ordering, Arc},
         time::Instant,
     },
@@ -455,7 +456,10 @@ impl Consumer {
             transaction_qos_cost_results.iter().map(|r| match r {
                 Ok(_cost) => Ok(()),
                 Err(err) => Err(err.clone()),
-            })
+            }),
+            // TODO (LB): bundle account locker!!!!
+            &HashSet::default(),
+            &HashSet::default()
         ));
 
         // retryable_txs includes AccountInUse, WouldExceedMaxBlockCostLimit
@@ -530,7 +534,7 @@ impl Consumer {
             if transaction_status_sender_enabled {
                 pre_balance_info.native = bank.collect_balances(batch);
                 pre_balance_info.token =
-                    collect_token_balances(bank, batch, &mut pre_balance_info.mint_decimals)
+                    collect_token_balances(bank, batch, &mut pre_balance_info.mint_decimals, None)
             }
         });
         execute_and_commit_timings.collect_balances_us = collect_balances_us;

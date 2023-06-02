@@ -5,6 +5,7 @@
 //! - Sends transactions and bundles to the validator.
 use {
     crate::{
+        banking_trace::BankingPacketSender,
         packet_bundle::PacketBundle,
         proto_packet_to_packet,
         proxy::{
@@ -94,7 +95,7 @@ impl BlockEngineStage {
         // Channel that non-trusted packets get piped through.
         packet_tx: Sender<PacketBatch>,
         // Channel that trusted packets get piped through.
-        verified_packet_tx: Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
+        banking_packet_sender: BankingPacketSender,
         exit: Arc<AtomicBool>,
         block_builder_fee_info: &Arc<Mutex<BlockBuilderFeeInfo>>,
     ) -> Self {
@@ -112,7 +113,7 @@ impl BlockEngineStage {
                     cluster_info,
                     bundle_tx,
                     packet_tx,
-                    verified_packet_tx,
+                    banking_packet_sender,
                     exit,
                     block_builder_fee_info,
                 ));
@@ -137,7 +138,7 @@ impl BlockEngineStage {
         cluster_info: Arc<ClusterInfo>,
         bundle_tx: Sender<Vec<PacketBundle>>,
         packet_tx: Sender<PacketBatch>,
-        verified_packet_tx: Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
+        banking_packet_sender: BankingPacketSender,
         exit: Arc<AtomicBool>,
         block_builder_fee_info: Arc<Mutex<BlockBuilderFeeInfo>>,
     ) {
@@ -155,7 +156,7 @@ impl BlockEngineStage {
                 &cluster_info,
                 &bundle_tx,
                 &packet_tx,
-                &verified_packet_tx,
+                &banking_packet_sender,
                 &exit,
                 &block_builder_fee_info,
                 &CONNECTION_TIMEOUT,
@@ -187,7 +188,7 @@ impl BlockEngineStage {
         cluster_info: &Arc<ClusterInfo>,
         bundle_tx: &Sender<Vec<PacketBundle>>,
         packet_tx: &Sender<PacketBatch>,
-        verified_packet_tx: &Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
+        banking_packet_sender: &BankingPacketSender,
         exit: &Arc<AtomicBool>,
         block_builder_fee_info: &Arc<Mutex<BlockBuilderFeeInfo>>,
         connection_timeout: &Duration,
@@ -257,7 +258,7 @@ impl BlockEngineStage {
             packet_tx,
             &local_config,
             block_engine_config,
-            verified_packet_tx,
+            banking_packet_sender,
             exit,
             block_builder_fee_info,
             auth_client,
@@ -277,7 +278,7 @@ impl BlockEngineStage {
         packet_tx: &Sender<PacketBatch>,
         local_config: &BlockEngineConfig, // local copy of config with current connections
         global_config: &Arc<Mutex<BlockEngineConfig>>, // guarded reference for detecting run-time updates
-        verified_packet_tx: &Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
+        banking_packet_sender: &BankingPacketSender,
         exit: &Arc<AtomicBool>,
         block_builder_fee_info: &Arc<Mutex<BlockBuilderFeeInfo>>,
         auth_client: AuthServiceClient<Channel>,
@@ -328,7 +329,7 @@ impl BlockEngineStage {
             packet_tx,
             local_config,
             global_config,
-            verified_packet_tx,
+            banking_packet_sender,
             exit,
             block_builder_fee_info,
             auth_client,
@@ -352,7 +353,7 @@ impl BlockEngineStage {
         packet_tx: &Sender<PacketBatch>,
         local_config: &BlockEngineConfig, // local copy of config with current connections
         global_config: &Arc<Mutex<BlockEngineConfig>>, // guarded reference for detecting run-time updates
-        verified_packet_tx: &Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
+        banking_packet_sender: &BankingPacketSender,
         exit: &Arc<AtomicBool>,
         block_builder_fee_info: &Arc<Mutex<BlockBuilderFeeInfo>>,
         mut auth_client: AuthServiceClient<Channel>,
@@ -378,7 +379,7 @@ impl BlockEngineStage {
             tokio::select! {
                 maybe_msg = packet_stream.message() => {
                     let resp = maybe_msg?.ok_or(ProxyError::GrpcStreamDisconnected)?;
-                    Self::handle_block_engine_packets(resp, packet_tx, verified_packet_tx, local_config.trust_packets, &mut block_engine_stats)?;
+                    Self::handle_block_engine_packets(resp, packet_tx, banking_packet_sender, local_config.trust_packets, &mut block_engine_stats)?;
                 }
                 maybe_bundles = bundle_stream.message() => {
                     Self::handle_block_engine_maybe_bundles(maybe_bundles, bundle_tx, &mut block_engine_stats)?;
@@ -480,7 +481,7 @@ impl BlockEngineStage {
     fn handle_block_engine_packets(
         resp: block_engine::SubscribePacketsResponse,
         packet_tx: &Sender<PacketBatch>,
-        verified_packet_tx: &Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
+        banking_packet_sender: &BankingPacketSender,
         trust_packets: bool,
         block_engine_stats: &mut BlockEngineStageStats,
     ) -> crate::proxy::Result<()> {
@@ -501,8 +502,8 @@ impl BlockEngineStage {
             saturating_add_assign!(block_engine_stats.num_packets, packet_batch.len() as u64);
 
             if trust_packets {
-                verified_packet_tx
-                    .send((vec![packet_batch], None))
+                banking_packet_sender
+                    .send(Arc::new((vec![packet_batch], None)))
                     .map_err(|_| ProxyError::PacketForwardError)?;
             } else {
                 packet_tx

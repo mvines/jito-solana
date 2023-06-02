@@ -2,7 +2,7 @@
 use {
     crate::immutable_deserialized_packet::ImmutableDeserializedPacket,
     crate::packet_bundle::PacketBundle,
-    crate::unprocessed_packet_batches::deserialize_packets,
+    crate::packet_deserializer::PacketDeserializer,
     solana_perf::sigverify::verify_packet,
     solana_runtime::{bank::Bank, transaction_error_metrics::TransactionErrorMetrics},
     solana_sdk::{
@@ -53,7 +53,7 @@ pub type BundleSanitizationResult<T> = Result<T, BundleSanitizerError>;
 /// NOTE: bundles need to be sanitized for a given bank. For instance, a bundle sanitized
 /// on bank n-1 will be valid for all of bank n-1, and may or may not be valid for bank n
 pub fn get_sanitized_bundle(
-    packet_bundle: &PacketBundle,
+    packet_bundle: &mut PacketBundle,
     bank: &Arc<Bank>,
     consensus_accounts_cache: &HashSet<Pubkey>,
     blacklisted_accounts: &HashSet<Pubkey>,
@@ -65,25 +65,22 @@ pub fn get_sanitized_bundle(
 
     if packet_bundle.batch.is_empty()
         || packet_bundle.batch.len() > MAX_PACKETS_PER_BUNDLE
-        || packet_bundle.batch.iter().any(|p| p.meta.discard())
+        || packet_bundle.batch.iter().any(|p| p.meta().discard())
         || packet_bundle
             .batch
-            .iter()
-            .any(|p| !verify_packet(&mut p.clone(), false))
+            .iter_mut()
+            .any(|p| !verify_packet(p, false))
     {
         return Err(BundleSanitizerError::FailedPacketBatchPreCheck);
     }
 
     let packet_indexes = (0..packet_bundle.batch.len()).collect::<Vec<usize>>();
-    let deserialized_packets = deserialize_packets(&packet_bundle.batch, &packet_indexes);
+    let deserialized_packets =
+        PacketDeserializer::deserialize_packets(&packet_bundle.batch, &packet_indexes, false);
+
     let transactions: Vec<SanitizedTransaction> = deserialized_packets
         .filter_map(|p| {
-            let immutable_packet = p.immutable_section().clone();
-            transaction_from_deserialized_packet(
-                &immutable_packet,
-                &bank.feature_set,
-                bank.as_ref(),
-            )
+            p.build_sanitized_transaction(&bank.feature_set, bank.vote_only_bank(), bank.as_ref())
         })
         .collect();
 
@@ -124,31 +121,6 @@ pub fn get_sanitized_bundle(
         transactions,
         bundle_id: packet_bundle.bundle_id.clone(),
     })
-}
-
-// This function deserializes packets into transactions, computes the blake3 hash of transaction
-// messages, and verifies secp256k1 instructions. A list of sanitized transactions are returned
-// with their packet indexes.
-// NOTES on tx v2:
-// - tx v2 can only load addresses set in previous slots
-// - tx v2 can't reorg indices in a lookup table
-// - tx v2 transaction loading fails if it tries to access an invalid index (either doesn't exist
-//   or exists but was set in the current slot
-#[allow(clippy::needless_collect)]
-fn transaction_from_deserialized_packet(
-    deserialized_packet: &ImmutableDeserializedPacket,
-    feature_set: &Arc<FeatureSet>,
-    address_loader: impl AddressLoader,
-) -> Option<SanitizedTransaction> {
-    let tx = SanitizedTransaction::try_new(
-        deserialized_packet.transaction().clone(),
-        *deserialized_packet.message_hash(),
-        deserialized_packet.is_simple_vote(),
-        address_loader,
-    )
-    .ok()?;
-    tx.verify_precompiles(feature_set).ok()?;
-    Some(tx)
 }
 
 #[cfg(test)]
@@ -553,7 +525,7 @@ mod tests {
             genesis_config.hash(),
         ));
         let mut packet = Packet::from_data(None, &tx).unwrap();
-        packet.meta.set_discard(true);
+        packet.meta_mut().set_discard(true);
 
         let packet_bundle = PacketBundle {
             batch: PacketBatch::new(vec![packet]),

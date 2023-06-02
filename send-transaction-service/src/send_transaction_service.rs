@@ -2,8 +2,10 @@ use {
     crate::tpu_info::TpuInfo,
     crossbeam_channel::{Receiver, RecvTimeoutError},
     log::*,
-    solana_client::connection_cache::Protocol,
-    solana_client::{connection_cache::ConnectionCache, tpu_connection::TpuConnection},
+    solana_client::{
+        connection_cache::{ConnectionCache, Protocol},
+        tpu_connection::TpuConnection,
+    },
     solana_gossip::cluster_info::ClusterInfo,
     solana_measure::measure::Measure,
     solana_metrics::datapoint_warn,

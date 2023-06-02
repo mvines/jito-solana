@@ -1,7 +1,6 @@
 //! The `retransmit_stage` retransmits shreds between validators
 #![allow(clippy::rc_buffer)]
 
-use std::iter::once;
 use {
     crate::cluster_nodes::{self, ClusterNodes, ClusterNodesCache, Error, MAX_NUM_TURBINE_HOPS},
     crossbeam_channel::{Receiver, RecvTimeoutError},
@@ -29,7 +28,8 @@ use {
     },
     std::{
         collections::HashMap,
-        iter::repeat,
+        iter,
+        iter::{once, repeat},
         net::{SocketAddr, UdpSocket},
         ops::AddAssign,
         sync::{
@@ -322,11 +322,13 @@ fn retransmit_shred(
     let data_plane_fanout = cluster_nodes::get_data_plane_fanout(key.slot(), root_bank);
     let (root_distance, addrs) =
         cluster_nodes.get_retransmit_addrs(slot_leader, key, root_bank, data_plane_fanout)?;
-    let addrs: Vec<_> = addrs
+    let mut addrs: Vec<_> = addrs
         .into_iter()
         .filter(|addr| ContactInfo::is_valid_address(addr, socket_addr_space))
-        .chain(shred_receiver_addr.map(|a| once(a)))
         .collect();
+    if let Some(addr) = shred_receiver_addr {
+        addrs.push(*addr);
+    }
 
     compute_turbine_peers.stop();
     stats

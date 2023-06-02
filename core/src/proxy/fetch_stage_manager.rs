@@ -1,7 +1,8 @@
 use {
     crate::proxy::{HeartbeatEvent, ProxyError},
     crossbeam_channel::{select, tick, Receiver, Sender},
-    solana_gossip::cluster_info::ClusterInfo,
+    solana_client::connection_cache::Protocol,
+    solana_gossip::{cluster_info::ClusterInfo, contact_info, contact_info::ContactInfo},
     solana_perf::packet::PacketBatch,
     std::{
         net::SocketAddr,
@@ -106,7 +107,10 @@ impl FetchStageManager {
                             warn!("heartbeat late, reconnecting fetch stage");
                             fetch_connected = true;
                             pending_disconnect = false;
-                            Self::set_tpu_addresses(&cluster_info, my_fallback_contact_info.tpu, my_fallback_contact_info.tpu_forwards);
+                            // TODO (LB): double check protocol AND DONT UNWRAP 
+                            if let Err(e) = Self::set_tpu_addresses(&cluster_info, my_fallback_contact_info.tpu(Protocol::QUIC).unwrap(), my_fallback_contact_info.tpu_forwards(Protocol::QUIC).unwrap()) {
+                                error!("error setting tpu or tpu_fwd to ({:?}, {:?}), error: {:?}", my_fallback_contact_info.tpu(Protocol::QUIC).unwrap(), my_fallback_contact_info.tpu_forwards(Protocol::QUIC).unwrap(), e);
+                            }
                             heartbeats_received = 0;
                         }
                         heartbeat_received = false;
@@ -124,7 +128,10 @@ impl FetchStageManager {
                                 info!("disconnecting fetch stage");
                                 fetch_connected = false;
                                 pending_disconnect = false;
-                                Self::set_tpu_addresses(&cluster_info, tpu_addr, tpu_forward_addr);
+                                // TODO (LB): double check protocol!!!
+                                if let Err(e) = Self::set_tpu_addresses(&cluster_info, tpu_addr, tpu_forward_addr) {
+                                    error!("error setting tpu or tpu_fwd to ({:?}, {:?}), error: {:?}", tpu_addr, tpu_forward_addr, e);
+                                }
                             }
                         } else {
                             {
@@ -150,11 +157,13 @@ impl FetchStageManager {
         cluster_info: &Arc<ClusterInfo>,
         tpu_address: SocketAddr,
         tpu_forward_address: SocketAddr,
-    ) {
+    ) -> Result<(), contact_info::Error> {
         let mut new_contact_info = cluster_info.my_contact_info();
-        new_contact_info.tpu = tpu_address;
-        new_contact_info.tpu_forwards = tpu_forward_address;
+        // TODO (LB): double check protocol!!!!!!
+        new_contact_info.set_tpu(tpu_address)?;
+        new_contact_info.set_tpu_forwards(tpu_forward_address)?;
         cluster_info.set_my_contact_info(new_contact_info);
+        Ok(())
     }
 
     pub fn join(self) -> thread::Result<()> {

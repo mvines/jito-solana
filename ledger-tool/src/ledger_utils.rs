@@ -91,13 +91,15 @@ pub fn load_and_process_ledger(
             snapshot_archive_path.unwrap_or_else(|| blockstore.ledger_path().to_path_buf());
         let incremental_snapshot_archives_dir =
             incremental_snapshot_archive_path.unwrap_or_else(|| full_snapshot_archives_dir.clone());
-        if let Some(full_snapshot_slot) =
-            snapshot_utils::get_highest_full_snapshot_archive_slot(&full_snapshot_archives_dir)
-        {
+        if let Some(full_snapshot_slot) = snapshot_utils::get_highest_full_snapshot_archive_slot(
+            &full_snapshot_archives_dir,
+            None,
+        ) {
             let incremental_snapshot_slot =
                 snapshot_utils::get_highest_incremental_snapshot_archive_slot(
                     &incremental_snapshot_archives_dir,
                     full_snapshot_slot,
+                    None,
                 )
                 .unwrap_or_default();
             starting_slot = std::cmp::max(full_snapshot_slot, incremental_snapshot_slot);

@@ -7,8 +7,10 @@ use {
         input_parsers::{pubkey_of, pubkeys_of, value_of},
         input_validators::normalize_to_url_if_moniker,
     },
-    solana_core::proxy::{block_engine_stage::BlockEngineConfig, relayer_stage::RelayerConfig},
-    solana_core::tower_storage::FileTowerStorage,
+    solana_core::{
+        proxy::{block_engine_stage::BlockEngineConfig, relayer_stage::RelayerConfig},
+        tower_storage::FileTowerStorage,
+    },
     solana_faucet::faucet::run_local_faucet_with_port,
     solana_rpc::{
         rpc::{JsonRpcConfig, RpcBigtableConfig},

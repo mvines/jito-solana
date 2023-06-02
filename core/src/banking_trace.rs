@@ -317,7 +317,8 @@ impl BankingTracer {
         Ok(thread)
     }
 }
-
+// TODO (LB): make sure this is okay
+#[derive(Clone)]
 pub struct TracedSender {
     label: ChannelLabel,
     sender: Sender<BankingPacketBatch>,

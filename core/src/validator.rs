@@ -1053,6 +1053,9 @@ impl Validator {
             cluster_info: cluster_info.clone(),
             vote_account: *vote_account,
             repair_whitelist: config.repair_whitelist.clone(),
+            block_engine_config: config.block_engine_config.clone(),
+            relayer_config: config.relayer_config.clone(),
+            shred_receiver_address: config.shred_receiver_address.clone(),
         });
 
         let waited_for_supermajority = match wait_for_supermajority(

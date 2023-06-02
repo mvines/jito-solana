@@ -8,7 +8,7 @@ use {
         banking_trace::{BankingTracer, TracerThread},
         broadcast_stage::{BroadcastStage, BroadcastStageType, RetransmitSlotsReceiver},
         bundle_account_locker::BundleAccountLocker,
-        bundle_stage::BundleStage,
+        // bundle_stage::BundleStage,
         cluster_info_vote_listener::{
             ClusterInfoVoteListener, GossipDuplicateConfirmedSlotsSender,
             GossipVerifiedVoteHashSender, VerifiedVoteSender, VoteTracker,
@@ -86,7 +86,7 @@ pub struct Tpu {
     tpu_forwards_quic_t: thread::JoinHandle<()>,
     staked_nodes_updater_service: StakedNodesUpdaterService,
     tracer_thread_hdl: TracerThread,
-    bundle_stage: BundleStage,
+    // bundle_stage: BundleStage,
 }
 
 impl Tpu {
@@ -210,7 +210,7 @@ impl Tpu {
         .unwrap();
 
         let sigverify_stage = {
-            let verifier = TransactionSigVerifier::new(non_vote_sender);
+            let verifier = TransactionSigVerifier::new(non_vote_sender.clone());
             SigVerifyStage::new(packet_receiver, verifier, "tpu-verifier")
         };
 
@@ -235,7 +235,7 @@ impl Tpu {
             bundle_sender,
             cluster_info.clone(),
             packet_sender.clone(),
-            verified_sender.clone(),
+            non_vote_sender.clone(),
             exit.clone(),
             &block_builder_fee_info,
         );
@@ -254,7 +254,7 @@ impl Tpu {
             cluster_info.clone(),
             heartbeat_tx,
             packet_sender,
-            verified_sender,
+            non_vote_sender.clone(),
             exit.clone(),
         );
 
@@ -300,19 +300,20 @@ impl Tpu {
             // bundle_account_locker.clone(),
         );
 
-        let bundle_stage = BundleStage::new(
-            cluster_info,
-            poh_recorder,
-            transaction_status_sender,
-            replay_vote_sender,
-            cost_model.clone(),
-            bundle_receiver,
-            exit.clone(),
-            tip_manager,
-            bundle_account_locker,
-            &block_builder_fee_info,
-            preallocated_bundle_cost,
-        );
+        // let bundle_stage = BundleStage::new(
+        //     cluster_info,
+        //     poh_recorder,
+        //     bundle_receiver,
+        //     transaction_status_sender,
+        //     replay_vote_sender,
+        //     log_messages_bytes_limit,
+        //     exit.clone(),
+        //     tip_manager,
+        //     bundle_account_locker,
+        //     &block_builder_fee_info,
+        //     preallocated_bundle_cost,
+        //     prioritization_fee_cache,
+        // );
 
         let broadcast_stage = broadcast_type.new_broadcast_stage(
             broadcast_sockets,
@@ -340,7 +341,7 @@ impl Tpu {
             tpu_forwards_quic_t,
             staked_nodes_updater_service,
             tracer_thread_hdl,
-            bundle_stage,
+            // bundle_stage,
         }
     }
 
@@ -354,7 +355,7 @@ impl Tpu {
             self.staked_nodes_updater_service.join(),
             self.tpu_quic_t.join(),
             self.tpu_forwards_quic_t.join(),
-            self.bundle_stage.join(),
+            // self.bundle_stage.join(),
         ];
 
         self.relayer_stage.join()?;

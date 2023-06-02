@@ -10,6 +10,7 @@
 
 use {
     crate::{
+        banking_trace::BankingPacketSender,
         proto_packet_to_packet,
         proxy::{
             auth::{generate_auth_tokens, maybe_refresh_auth_tokens, AuthInterceptor},
@@ -96,7 +97,7 @@ impl RelayerStage {
         // Channel that non-trusted streamed packets are piped through.
         packet_tx: Sender<PacketBatch>,
         // Channel that trusted streamed packets are piped through.
-        verified_packet_tx: Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
+        banking_packet_sender: BankingPacketSender,
         exit: Arc<AtomicBool>,
     ) -> Self {
         let thread = Builder::new()
@@ -112,7 +113,7 @@ impl RelayerStage {
                     cluster_info,
                     heartbeat_tx,
                     packet_tx,
-                    verified_packet_tx,
+                    banking_packet_sender,
                     exit,
                 ));
             })
@@ -136,7 +137,7 @@ impl RelayerStage {
         cluster_info: Arc<ClusterInfo>,
         heartbeat_tx: Sender<HeartbeatEvent>,
         packet_tx: Sender<PacketBatch>,
-        verified_packet_tx: Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
+        banking_packet_sender: BankingPacketSender,
         exit: Arc<AtomicBool>,
     ) {
         const CONNECTION_TIMEOUT: Duration = Duration::from_secs(CONNECTION_TIMEOUT_S);
@@ -154,7 +155,7 @@ impl RelayerStage {
                 &cluster_info,
                 &heartbeat_tx,
                 &packet_tx,
-                &verified_packet_tx,
+                &banking_packet_sender,
                 &exit,
                 &CONNECTION_TIMEOUT,
             )
@@ -185,7 +186,7 @@ impl RelayerStage {
         cluster_info: &Arc<ClusterInfo>,
         heartbeat_tx: &Sender<HeartbeatEvent>,
         packet_tx: &Sender<PacketBatch>,
-        verified_packet_tx: &Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
+        banking_packet_sender: &BankingPacketSender,
         exit: &Arc<AtomicBool>,
         connection_timeout: &Duration,
     ) -> crate::proxy::Result<()> {
@@ -249,7 +250,7 @@ impl RelayerStage {
             relayer_client,
             heartbeat_tx,
             packet_tx,
-            verified_packet_tx,
+            banking_packet_sender,
             &local_config,
             relayer_config,
             exit,
@@ -268,7 +269,7 @@ impl RelayerStage {
         mut client: RelayerClient<InterceptedService<Channel, AuthInterceptor>>,
         heartbeat_tx: &Sender<HeartbeatEvent>,
         packet_tx: &Sender<PacketBatch>,
-        verified_packet_tx: &Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
+        banking_packet_sender: &BankingPacketSender,
         local_config: &RelayerConfig, // local copy of config with current connections
         global_config: &Arc<Mutex<RelayerConfig>>, // guarded reference for detecting run-time updates
         exit: &Arc<AtomicBool>,
@@ -320,7 +321,7 @@ impl RelayerStage {
             packet_tx,
             local_config,
             global_config,
-            verified_packet_tx,
+            banking_packet_sender,
             exit,
             auth_client,
             access_token,
@@ -340,7 +341,7 @@ impl RelayerStage {
         packet_tx: &Sender<PacketBatch>,
         local_config: &RelayerConfig, // local copy of config with current connections
         global_config: &Arc<Mutex<RelayerConfig>>, // guarded reference for detecting run-time updates
-        verified_packet_tx: &Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
+        banking_packet_sender: &BankingPacketSender,
         exit: &Arc<AtomicBool>,
         mut auth_client: AuthServiceClient<Channel>,
         access_token: Arc<Mutex<Token>>,
@@ -367,7 +368,7 @@ impl RelayerStage {
             tokio::select! {
                 maybe_msg = packet_stream.message() => {
                     let resp = maybe_msg?.ok_or(ProxyError::GrpcStreamDisconnected)?;
-                    Self::handle_relayer_packets(resp, heartbeat_event, heartbeat_tx, &mut last_heartbeat_ts, packet_tx, local_config.trust_packets, verified_packet_tx, &mut relayer_stats)?;
+                    Self::handle_relayer_packets(resp, heartbeat_event, heartbeat_tx, &mut last_heartbeat_ts, packet_tx, local_config.trust_packets, banking_packet_sender, &mut relayer_stats)?;
                 }
                 _ = heartbeat_check_interval.tick() => {
                     if last_heartbeat_ts.elapsed() > local_config.oldest_allowed_heartbeat {
@@ -425,7 +426,7 @@ impl RelayerStage {
         last_heartbeat_ts: &mut Instant,
         packet_tx: &Sender<PacketBatch>,
         trust_packets: bool,
-        verified_packet_tx: &Sender<(Vec<PacketBatch>, Option<SigverifyTracerPacketStats>)>,
+        banking_packet_sender: &BankingPacketSender,
         relayer_stats: &mut RelayerStageStats,
     ) -> crate::proxy::Result<()> {
         match subscribe_packets_resp.msg {
@@ -449,8 +450,8 @@ impl RelayerStage {
                 saturating_add_assign!(relayer_stats.num_packets, packet_batch.len() as u64);
 
                 if trust_packets {
-                    verified_packet_tx
-                        .send((vec![packet_batch], None))
+                    banking_packet_sender
+                        .send(Arc::new((vec![packet_batch], None)))
                         .map_err(|_| ProxyError::PacketForwardError)?;
                 } else {
                     packet_tx

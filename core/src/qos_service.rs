@@ -3,7 +3,6 @@
 //! how transactions are included in blocks, and optimize those blocks.
 //!
 
-use solana_runtime::cost_tracker::{CostTracker, CostTrackerError};
 use {
     crate::banking_stage::{committer::CommitTransactionDetails, BatchedTransactionDetails},
     crossbeam_channel::{unbounded, Receiver, Sender},
@@ -11,6 +10,7 @@ use {
     solana_runtime::{
         bank::Bank,
         cost_model::{CostModel, TransactionCost},
+        cost_tracker::{CostTracker, CostTrackerError},
     },
     solana_sdk::{
         clock::Slot,
@@ -100,7 +100,8 @@ impl QosService {
         let (transactions_qos_cost_results, num_included) = self.select_transactions_per_cost(
             transactions.iter(),
             transaction_costs.into_iter(),
-            bank,
+            bank.slot(),
+            &mut bank.write_cost_tracker().unwrap(),
         );
         self.accumulate_estimated_transaction_costs(&Self::accumulate_batched_transaction_costs(
             transactions_qos_cost_results.iter(),
@@ -164,12 +165,8 @@ impl QosService {
                             },
                             Err(e) => {
                                 debug!("slot {:?}, transaction {:?}, cost {:?}, not fit into current block, '{:?}'", slot, tx, cost, e);
-                                match e {
-                                    CostTrackerError::WouldExceedBlockMaxLimit => {
-                                        Err(TransactionError::WouldExceedMaxBlockCostLimit)
-                                    }
-                                    Err(e) => TransactionError::from(e)
-                                    }
+                                // TODO (LB): double check this
+                                Err(TransactionError::from(e))
                             }
                         }
                     },

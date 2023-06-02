@@ -15,6 +15,7 @@ pub mod banking_stage;
 pub mod banking_trace;
 pub mod broadcast_stage;
 pub mod bundle_account_locker;
+pub mod bundle_consumer;
 pub mod bundle_sanitizer;
 pub mod bundle_stage;
 mod bundle_stage_leader_stats;
@@ -132,24 +133,23 @@ pub fn proto_packet_to_packet(p: jito_protos::proto::packet::Packet) -> Packet {
     data[..copy_len].copy_from_slice(&p.data[..copy_len]);
     let mut packet = Packet::new(data, Meta::default());
     if let Some(meta) = p.meta {
-        packet.meta.size = meta.size as usize;
-        packet.meta.addr = meta.addr.parse().unwrap_or(UNKNOWN_IP);
-        packet.meta.port = meta.port as u16;
+        packet.meta_mut().size = meta.size as usize;
+        packet.meta_mut().addr = meta.addr.parse().unwrap_or(UNKNOWN_IP);
+        packet.meta_mut().port = meta.port as u16;
         if let Some(flags) = meta.flags {
             if flags.simple_vote_tx {
-                packet.meta.flags.insert(PacketFlags::SIMPLE_VOTE_TX);
+                packet.meta_mut().flags.insert(PacketFlags::SIMPLE_VOTE_TX);
             }
             if flags.forwarded {
-                packet.meta.flags.insert(PacketFlags::FORWARDED);
+                packet.meta_mut().flags.insert(PacketFlags::FORWARDED);
             }
             if flags.tracer_packet {
-                packet.meta.flags.insert(PacketFlags::TRACER_PACKET);
+                packet.meta_mut().flags.insert(PacketFlags::TRACER_PACKET);
             }
             if flags.repair {
-                packet.meta.flags.insert(PacketFlags::REPAIR);
+                packet.meta_mut().flags.insert(PacketFlags::REPAIR);
             }
         }
-        packet.meta.sender_stake = meta.sender_stake;
     }
     packet
 }
