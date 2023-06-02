@@ -295,8 +295,9 @@ impl Tpu {
             connection_cache.clone(),
             bank_forks.clone(),
             prioritization_fee_cache,
-            blacklisted_accounts,
-            bundle_account_locker.clone(),
+            // TODO (LB): add back in
+            // blacklisted_accounts,
+            // bundle_account_locker.clone(),
         );
 
         let bundle_stage = BundleStage::new(

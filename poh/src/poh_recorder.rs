@@ -160,6 +160,7 @@ impl TransactionRecorder {
 
     /// Hashes `transactions` and sends to PoH service for recording. Waits for response up to 1s.
     /// Panics on unexpected (non-`MaxHeightReached`) errors.
+    /// TODO (LB): move this to mixins_txs: Vec<(Hash, Vec<VersionedTransaction>)>,
     pub fn record_transactions(
         &self,
         bank_slot: Slot,
@@ -172,7 +173,8 @@ impl TransactionRecorder {
             let (hash, hash_us) = measure_us!(hash_transactions(&transactions));
             record_transactions_timings.hash_us = hash_us;
 
-            let (res, poh_record_us) = measure_us!(self.record(bank_slot, hash, transactions));
+            let (res, poh_record_us) =
+                measure_us!(self.record(bank_slot, vec![(hash, transactions)]));
             record_transactions_timings.poh_record_us = poh_record_us;
 
             match res {

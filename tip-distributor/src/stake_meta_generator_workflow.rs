@@ -110,7 +110,7 @@ fn create_bank_from_snapshot(
         &snapshot_config,
         &ProcessOptions::default(),
         None,
-        &Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
     );
 
     let working_bank = bank_forks.read().unwrap().working_bank();
@@ -263,7 +263,7 @@ pub fn generate_stake_meta_collection(
                 None
             };
 
-            let vote_state = vote_account.vote_state().as_ref().unwrap();
+            let vote_state = vote_account.vote_state().unwrap();
             delegations.sort();
             stake_metas.push(StakeMeta {
                 maybe_tip_distribution_meta,

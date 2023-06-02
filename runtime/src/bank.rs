@@ -264,6 +264,7 @@ pub struct BankRc {
     pub(crate) bank_id_generator: Arc<AtomicU64>,
 }
 
+use crate::accounts::AccountLocks;
 #[cfg(RUSTC_WITH_SPECIALIZATION)]
 use solana_frozen_abi::abi_example::AbiExample;
 
@@ -372,10 +373,7 @@ impl TransactionExecutionResult {
     ) -> result::Result<(), (BundleExecutionError, &'a Signature)> {
         for (exec_results, sanitized_tx) in execution_results.iter().zip(sanitized_txs) {
             match exec_results {
-                TransactionExecutionResult::Executed {
-                    details,
-                    tx_executor_cache: _,
-                } => {
+                TransactionExecutionResult::Executed { details, .. } => {
                     if let Err(e) = &details.status {
                         return Err((e.clone().into(), sanitized_tx.signature()));
                     }
@@ -5535,7 +5533,6 @@ impl Bank {
             &self.rent_collector,
             &durable_nonce,
             lamports_per_signature,
-            self.preserve_rent_epoch_for_rent_exempt_accounts(),
         )
         .0
     }

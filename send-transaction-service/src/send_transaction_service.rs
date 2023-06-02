@@ -2,6 +2,7 @@ use {
     crate::tpu_info::TpuInfo,
     crossbeam_channel::{Receiver, RecvTimeoutError},
     log::*,
+    solana_client::connection_cache::Protocol,
     solana_client::{connection_cache::ConnectionCache, tpu_connection::TpuConnection},
     solana_gossip::cluster_info::ClusterInfo,
     solana_measure::measure::Measure,
@@ -457,7 +458,7 @@ impl SendTransactionService {
                     stats
                         .sent_transactions
                         .fetch_add(transactions.len() as u64, Ordering::Relaxed);
-                    let tpu_address = cluster_info.my_contact_info().tpu;
+                    let tpu_address = cluster_info.my_contact_info().tpu(Protocol::QUIC).unwrap();
                     Self::send_transactions_in_batch(
                         &tpu_address,
                         &mut transactions,
@@ -537,7 +538,7 @@ impl SendTransactionService {
                         let bank_forks = bank_forks.read().unwrap();
                         (bank_forks.root_bank(), bank_forks.working_bank())
                     };
-                    let tpu_address = cluster_info.my_contact_info().tpu;
+                    let tpu_address = cluster_info.my_contact_info().tpu(Protocol::QUIC).unwrap();
                     let _result = Self::process_transactions(
                         &working_bank,
                         &root_bank,
