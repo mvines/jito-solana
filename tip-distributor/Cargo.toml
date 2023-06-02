@@ -6,7 +6,7 @@ license = "Apache-2.0"
 description = "Collection of binaries used to distribute MEV rewards to delegators and validators."
 
 [dependencies]
-anchor-lang = { path = "../anchor/lang" }
+anchor-lang = { workspace = true }
 clap = { version = "4.1.11", features = ["derive", "env"] }
 env_logger = "0.9.0"
 futures = "0.3.21"
